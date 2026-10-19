@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="vi" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BookStudio — Audiobook Production Studio Mockup</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            },
+            surface: {
+              base: '#09090b',
+              panel: '#121215',
+              card: '#18181b',
+              border: '#27272a',
+              hover: '#222226',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    code, .font-mono { font-family: 'JetBrains Mono', monospace; }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #09090b; }
+    ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+  </style>
+</head>
+<body class="bg-[#09090b] text-zinc-100 h-screen flex flex-col overflow-hidden select-none">
+
+  <!-- TOP APP BAR -->
+  <header class="h-12 border-b border-surface-border bg-surface-panel flex items-center justify-between px-4 z-20">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 rounded-lg bg-gradient-to-tr from-brand-600 to-purple-500 flex items-center justify-center font-bold text-white shadow-lg shadow-brand-500/20 text-sm">
+          🎙️
+        </div>
+        <span class="font-bold tracking-tight text-white flex items-center gap-1.5 text-sm">
+          BookStudio <span class="text-[10px] px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-400 font-mono font-medium">v1.0-alpha</span>
+        </span>
+      </div>
+
+      <div class="h-4 w-px bg-surface-border mx-1"></div>
+
+      <!-- Navigation Tabs -->
+      <nav class="flex items-center gap-1">
+        <button onclick="switchTab('dashboard')" id="btn-tab-dashboard" class="px-3 py-1 rounded-md text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-surface-hover transition-colors">
+          📚 Dự án Sách
+        </button>
+        <button onclick="switchTab('studio')" id="btn-tab-studio" class="px-3 py-1 rounded-md text-xs font-medium bg-surface-border text-white transition-colors flex items-center gap-1.5">
+          🎧 Studio Biên Tập
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+        </button>
+      </nav>
+    </div>
+
+    <!-- Center Project Info (When in Studio) -->
+    <div id="top-book-meta" class="flex items-center gap-2 text-xs">
+      <span class="text-zinc-400">Đang mở:</span>
+      <span class="font-semibold text-zinc-200">Đề thi đẫm máu</span>
+      <span class="text-zinc-500">•</span>
+      <span class="text-zinc-400">Lôi Mễ</span>
+      <span class="text-zinc-500">•</span>
+      <span class="px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 text-[11px] font-medium border border-purple-500/20">
+        Giọng đọc: Thảo Nhi (Studio 48kHz)
+      </span>
+    </div>
+
+    <!-- Right Actions -->
+    <div class="flex items-center gap-2">
+      <!-- Engine Status Pill -->
+      <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs">
+        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+        <span class="font-medium text-[11px]">VieNeu-TTS: Online (Port 8880)</span>
+      </div>
+
+      <!-- Quick Action Buttons -->
+      <button onclick="openModal('modal-voice')" class="px-2.5 py-1 rounded border border-surface-border bg-surface-card hover:bg-surface-hover text-xs text-zinc-300 flex items-center gap-1.5 transition">
+        <span>⚙️ Giọng đọc</span>
+      </button>
+
+      <button onclick="openModal('modal-cast')" class="px-2.5 py-1 rounded border border-surface-border bg-surface-card hover:bg-surface-hover text-xs text-zinc-300 flex items-center gap-1.5 transition">
+        <span>🎭 Phân vai</span>
+      </button>
+
+      <button onclick="openModal('modal-export')" class="px-3 py-1 rounded bg-brand-600 hover:bg-brand-500 text-xs font-medium text-white shadow-md shadow-brand-600/30 flex items-center gap-1.5 transition">
+        <span>💾 Xuất Audio</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN VIEWPORT -->
+  <div class="flex-1 relative overflow-hidden flex">
+
+    <!-- ==================== VIEW 1: PROJECT DASHBOARD ==================== -->
+    <main id="view-dashboard" class="hidden absolute inset-0 bg-[#09090b] p-6 overflow-y-auto">
+      <div class="max-w-6xl mx-auto space-y-6">
+        
+        <!-- Header & Stats -->
+        <div class="flex items-center justify-between">
+          <div>
+            <h1 class="text-2xl font-bold tracking-tight text-white">Quản lý Dự án Sách Nói</h1>
+            <p class="text-sm text-zinc-400 mt-0.5">Import sách từ file EPUB, PDF hoặc quản lý các dự án đang thu âm dở dang.</p>
+          </div>
+          <button onclick="document.getElementById('file-input').click()" class="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white font-medium text-sm rounded-lg shadow-lg shadow-brand-500/20 flex items-center gap-2 transition">
+            <span>➕ Thêm Sách Mới (EPUB / PDF)</span>
+          </button>
+          <input type="file" id="file-input" class="hidden" accept=".epub,.pdf,.mobi" onchange="alert('Đã chọn file: ' + this.files[0].name + '. Đang bóc tách chương...')">
+        </div>
+
+        <!-- Quick Drag & Drop Zone -->
+        <div class="border-2 border-dashed border-surface-border hover:border-brand-500/60 rounded-xl p-8 text-center bg-surface-panel/50 hover:bg-surface-panel transition-all cursor-pointer group" onclick="document.getElementById('file-input').click()">
+          <div class="w-12 h-12 mx-auto rounded-full bg-brand-500/10 text-brand-400 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
+            📖
+          </div>
+          <h3 class="mt-3 text-sm font-semibold text-zinc-200">Kéo thả file sách vào đây hoặc bấm để duyệt file</h3>
+          <p class="text-xs text-zinc-500 mt-1">Hỗ trợ các định dạng .EPUB, .PDF, .MOBI (Tự động nhận diện Mục lục & bóc tách từng câu)</p>
+        </div>
+
+        <!-- Projects Grid -->
+        <div>
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wider">Dự án gần đây (3)</h2>
+            <div class="flex items-center gap-2">
+              <input type="text" placeholder="Tìm kiếm sách..." class="bg-surface-card border border-surface-border text-xs rounded-md px-3 py-1.5 text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-brand-500 w-64">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <!-- Project Card 1: Active -->
+            <div class="bg-surface-panel border border-brand-500/40 hover:border-brand-500 rounded-xl p-4 flex flex-col justify-between transition-all hover:shadow-xl hover:shadow-brand-500/5 group cursor-pointer" onclick="switchTab('studio')">
+              <div class="flex gap-3">
+                <div class="w-16 h-24 bg-zinc-800 rounded-md overflow-hidden flex-shrink-0 shadow border border-zinc-700/50 flex items-center justify-center text-2xl">
+                  📕
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center justify-between">
+                    <span class="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Đang sản xuất</span>
+                    <span class="text-[11px] text-zinc-500 font-mono">Hôm nay</span>
+                  </div>
+                  <h3 class="text-sm font-bold text-white mt-1 truncate group-hover:text-brand-400 transition-colors">Đề thi đẫm máu</h3>
+                  <p class="text-xs text-zinc-400 truncate">Lôi Mễ • 24 Chương</p>
+                  <p class="text-[11px] text-purple-400 mt-2 flex items-center gap-1 truncate">
+                    <span>🎙️ Giọng: Thảo Nhi (Studio)</span>
+                  </p>
+                </div>
+              </div>
+              <div class="mt-4 pt-3 border-t border-surface-border/80">
+                <div class="flex justify-between text-xs text-zinc-400 mb-1.5">
+                  <span>Tiến độ sinh âm</span>
+                  <span class="font-mono text-white font-medium">18 / 24 chương (75%)</span>
+                </div>
+                <div class="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+                  <div class="bg-gradient-to-r from-brand-600 to-purple-500 h-full rounded-full" style="width: 75%"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Project Card 2 -->
+            <div class="bg-surface-panel border border-surface-border hover:border-zinc-700 rounded-xl p-4 flex flex-col justify-between transition-all hover:shadow-lg cursor-pointer">
+              <div class="flex gap-3">
+                <div class="w-16 h-24 bg-zinc-800 rounded-md overflow-hidden flex-shrink-0 shadow border border-zinc-700/50 flex items-center justify-center text-2xl">
+                  🔞
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center justify-between">
+                    <span class="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">Hoàn thành</span>
+                    <span class="text-[11px] text-zinc-500 font-mono">18/10</span>
+                  </div>
+                  <h3 class="text-sm font-bold text-white mt-1 truncate">Bạn trai thích bị cắm sừng</h3>
+                  <p class="text-xs text-zinc-400 truncate">Erotic Adult Novel • 8 Chương</p>
+                  <p class="text-[11px] text-pink-400 mt-2 flex items-center gap-1 truncate">
+                    <span>🎙️ Giọng: Ngọc Lan 18+ (Đê mê)</span>
+                  </p>
+                </div>
+              </div>
+              <div class="mt-4 pt-3 border-t border-surface-border/80">
+                <div class="flex justify-between text-xs text-zinc-400 mb-1.5">
+                  <span>Thời lượng xuất</span>
+                  <span class="font-mono text-emerald-400 font-medium">1h 42m (Master M4B)</span>
+                </div>
+                <div class="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+                  <div class="bg-emerald-500 h-full rounded-full" style="width: 100%"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Project Card 3 -->
+            <div class="bg-surface-panel border border-surface-border hover:border-zinc-700 rounded-xl p-4 flex flex-col justify-between transition-all hover:shadow-lg cursor-pointer">
+              <div class="flex gap-3">
+                <div class="w-16 h-24 bg-zinc-800 rounded-md overflow-hidden flex-shrink-0 shadow border border-zinc-700/50 flex items-center justify-center text-2xl">
+                  🌲
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center justify-between">
+                    <span class="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-zinc-700/50 text-zinc-400">Mới import</span>
+                    <span class="text-[11px] text-zinc-500 font-mono">16/10</span>
+                  </div>
+                  <h3 class="text-sm font-bold text-white mt-1 truncate">The Adventures of Pinocchio</h3>
+                  <p class="text-xs text-zinc-400 truncate">Carlo Collodi • Song ngữ En-Vi</p>
+                  <p class="text-[11px] text-blue-400 mt-2 flex items-center gap-1 truncate">
+                    <span>🎙️ Giọng: Thảo Nhi Bilingual</span>
+                  </p>
+                </div>
+              </div>
+              <div class="mt-4 pt-3 border-t border-surface-border/80">
+                <div class="flex justify-between text-xs text-zinc-400 mb-1.5">
+                  <span>Tiến độ sinh âm</span>
+                  <span class="font-mono text-zinc-400 font-medium">0 / 36 chương (Chưa đọc)</span>
+                </div>
+                <div class="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+                  <div class="bg-zinc-600 h-full rounded-full" style="width: 0%"></div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- ==================== VIEW 2: STUDIO WORKSPACE ==================== -->
+    <main id="view-studio" class="flex-1 flex flex-col h-full bg-[#09090b]">
+
+      <!-- WORKSPACE 3-PANE LAYOUT -->
+      <div class="flex-1 flex overflow-hidden">
+
+        <!-- LEFT SIDEBAR: CHAPTER EXPLORER (260px) -->
+        <aside class="w-64 border-r border-surface-border bg-surface-panel flex flex-col flex-shrink-0">
+          <!-- Sidebar Header -->
+          <div class="p-3 border-b border-surface-border flex items-center justify-between">
+            <span class="text-xs font-semibold uppercase tracking-wider text-zinc-400">Mục lục Chương (24)</span>
+            <button class="text-xs text-brand-400 hover:text-brand-300 font-medium">Tự chia lại</button>
+          </div>
+
+          <!-- Chapter List -->
+          <div class="flex-1 overflow-y-auto p-2 space-y-1">
+            
+            <!-- Chapter 1 (Active) -->
+            <div class="p-2.5 rounded-lg bg-brand-600/15 border border-brand-500/40 text-white cursor-pointer transition">
+              <div class="flex items-center justify-between text-xs font-semibold">
+                <span class="truncate">Chương 1: Bắt đầu ác mộng</span>
+                <span class="text-[10px] px-1 rounded bg-emerald-500/20 text-emerald-400 font-mono">100%</span>
+              </div>
+              <div class="flex items-center justify-between text-[11px] text-zinc-400 mt-1">
+                <span>85 câu • 1.420 từ</span>
+                <span class="font-mono text-zinc-300">06:24</span>
+              </div>
+            </div>
+
+            <!-- Chapter 2 -->
+            <div class="p-2.5 rounded-lg hover:bg-surface-hover text-zinc-300 cursor-pointer transition">
+              <div class="flex items-center justify-between text-xs font-medium">
+                <span class="truncate">Chương 2: Lá thư khiêu chiến</span>
+                <span class="text-[10px] px-1 rounded bg-amber-500/20 text-amber-400 font-mono">45%</span>
+              </div>
+              <div class="flex items-center justify-between text-[11px] text-zinc-500 mt-1">
+                <span>112 câu • 1.890 từ</span>
+                <span class="font-mono">Đang đọc câu 48...</span>
+              </div>
+            </div>
+
+            <!-- Chapter 3 -->
+            <div class="p-2.5 rounded-lg hover:bg-surface-hover text-zinc-400 cursor-pointer transition">
+              <div class="flex items-center justify-between text-xs">
+                <span class="truncate">Chương 3: Hồ Huỳnh Độc</span>
+                <span class="text-[10px] text-zinc-600 font-mono">Chờ</span>
+              </div>
+              <div class="flex items-center justify-between text-[11px] text-zinc-600 mt-1">
+                <span>94 câu • 1.630 từ</span>
+                <span>--:--</span>
+              </div>
+            </div>
+
+            <!-- Chapter 4 -->
+            <div class="p-2.5 rounded-lg hover:bg-surface-hover text-zinc-400 cursor-pointer transition">
+              <div class="flex items-center justify-between text-xs">
+                <span class="truncate">Chương 4: Dấu vân tay bí ẩn</span>
+                <span class="text-[10px] text-zinc-600 font-mono">Chờ</span>
+              </div>
+              <div class="flex items-center justify-between text-[11px] text-zinc-600 mt-1">
+                <span>130 câu • 2.210 từ</span>
+                <span>--:--</span>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Bottom Batch Action -->
+          <div class="p-3 border-t border-surface-border bg-surface-card">
+            <button onclick="startBatchTts()" class="w-full py-2 bg-gradient-to-r from-brand-600 to-purple-600 hover:from-brand-500 hover:to-purple-500 text-white rounded-md text-xs font-semibold shadow flex items-center justify-center gap-1.5 transition">
+              <span>⚡ Đọc Tự Động Toàn Bộ Chương</span>
+            </button>
+          </div>
+        </aside>
+
+        <!-- CENTER PANEL: SCRIPT & TELEPROMPTER TABLE (Flex-1) -->
+        <section class="flex-1 flex flex-col bg-[#09090b] overflow-hidden">
+          
+          <!-- Chapter Banner & Quick Controls -->
+          <div class="p-3 border-b border-surface-border bg-surface-panel/70 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <h2 class="font-bold text-sm text-zinc-100 flex items-center gap-2">
+                <span>Chương 1: Bắt đầu ác mộng</span>
+                <span class="text-xs px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 font-normal">85 câu</span>
+              </h2>
+            </div>
+
+            <!-- Script Filters & Search -->
+            <div class="flex items-center gap-2 text-xs">
+              <div class="flex items-center rounded border border-surface-border bg-surface-card overflow-hidden">
+                <button class="px-2.5 py-1 bg-surface-border text-white font-medium">Tất cả</button>
+                <button class="px-2.5 py-1 text-zinc-400 hover:text-white">Lỗi / Chưa đọc</button>
+                <button class="px-2.5 py-1 text-zinc-400 hover:text-white">Lời thoại</button>
+              </div>
+              <button class="px-2 py-1 bg-surface-card border border-surface-border rounded hover:bg-surface-hover text-zinc-300">
+                🔍 Tìm text
+              </button>
+            </div>
+          </div>
+
+          <!-- Sentence Table (Descript / ElevenLabs Style) -->
+          <div class="flex-1 overflow-y-auto p-4 space-y-2" id="sentence-container">
+
+            <!-- Sentence 1 (Playing / Selected) -->
+            <div id="row-s1" class="group p-3 rounded-xl border border-brand-500/60 bg-brand-500/10 transition-all flex items-start gap-3 cursor-pointer" onclick="selectSentence(1, 'Điều Phương Mộc muốn tìm hiểu, chính là những việc xảy ra trong hai năm trở lại đây...', '07.68s')">
+              <button onclick="togglePlay(event, 1)" class="w-8 h-8 rounded-full bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center text-xs flex-shrink-0 shadow-md shadow-brand-600/30">
+                ▶️
+              </button>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-[10px] font-mono px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400">#001</span>
+                  <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">Dẫn chuyện (Thảo Nhi)</span>
+                  <span class="text-[10px] text-zinc-500 font-mono">00:00 - 00:07 • 7.68s</span>
+                  <span class="text-[10px] text-emerald-400 font-medium ml-auto flex items-center gap-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Đã đọc 48kHz
+                  </span>
+                </div>
+                <!-- Sentence Text with Inline Edit -->
+                <p class="text-sm text-zinc-100 leading-relaxed font-normal selection:bg-brand-500/40" contenteditable="true">
+                  Điều Phương Mộc muốn tìm hiểu, chính là những việc xảy ra trong hai năm trở lại đây, và đó cũng chính là đáp án của câu đố trong tất cả các vụ án.
+                </p>
+              </div>
+              <!-- Action Buttons (Hover to show) -->
+              <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button title="Đọc lại câu này (Regenerate)" onclick="regenerateSentence(1)" class="p-1.5 rounded hover:bg-surface-hover text-zinc-400 hover:text-brand-400 text-xs">
+                  🔄
+                </button>
+                <button title="Cắt khoảng lặng" class="p-1.5 rounded hover:bg-surface-hover text-zinc-400 hover:text-white text-xs">
+                  ✂️
+                </button>
+              </div>
+            </div>
+
+            <!-- Sentence 2 -->
+            <div id="row-s2" class="group p-3 rounded-xl border border-surface-border hover:border-zinc-700 bg-surface-panel transition-all flex items-start gap-3 cursor-pointer" onclick="selectSentence(2, 'Trời đã về khuya, những hạt mưa thu lất phất đập vào cửa sổ ký túc xá đại học J.', '05.20s')">
+              <button onclick="togglePlay(event, 2)" class="w-8 h-8 rounded-full bg-surface-card hover:bg-zinc-700 text-zinc-300 flex items-center justify-center text-xs flex-shrink-0 border border-surface-border">
+                ▶️
+              </button>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-[10px] font-mono px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400">#002</span>
+                  <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">Dẫn chuyện (Thảo Nhi)</span>
+                  <span class="text-[10px] text-zinc-500 font-mono">00:07 - 00:12 • 5.20s</span>
+                  <span class="text-[10px] text-emerald-400 font-medium ml-auto flex items-center gap-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Đã đọc 48kHz
+                  </span>
+                </div>
+                <p class="text-sm text-zinc-300 leading-relaxed font-normal" contenteditable="true">
+                  Trời đã về khuya, những hạt mưa thu lất phất đập vào cửa sổ ký túc xá đại học J.
+                </p>
+              </div>
+              <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button title="Đọc lại câu này (Regenerate)" onclick="regenerateSentence(2)" class="p-1.5 rounded hover:bg-surface-hover text-zinc-400 hover:text-brand-400 text-xs">
+                  🔄
+                </button>
+              </div>
+            </div>
+
+            <!-- Sentence 3 (Dialogue Line) -->
+            <div id="row-s3" class="group p-3 rounded-xl border border-surface-border hover:border-zinc-700 bg-surface-panel transition-all flex items-start gap-3 cursor-pointer" onclick="selectSentence(3, '— Cậu vẫn chưa ngủ à Phương Mộc? — Giọng người bạn cùng phòng vang lên mệt mỏi.', '06.10s')">
+              <button onclick="togglePlay(event, 3)" class="w-8 h-8 rounded-full bg-surface-card hover:bg-zinc-700 text-zinc-300 flex items-center justify-center text-xs flex-shrink-0 border border-surface-border">
+                ▶️
+              </button>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-[10px] font-mono px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400">#003</span>
+                  <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">💬 Thoại: Bạn cùng phòng (Hải Đăng)</span>
+                  <span class="text-[10px] text-zinc-500 font-mono">00:12 - 00:18 • 6.10s</span>
+                  <span class="text-[10px] text-emerald-400 font-medium ml-auto flex items-center gap-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Đã đọc
+                  </span>
+                </div>
+                <p class="text-sm text-zinc-200 leading-relaxed font-normal italic" contenteditable="true">
+                  — Cậu vẫn chưa ngủ à Phương Mộc? — Giọng người bạn cùng phòng vang lên mệt mỏi.
+                </p>
+              </div>
+              <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button title="Đọc lại câu này" onclick="regenerateSentence(3)" class="p-1.5 rounded hover:bg-surface-hover text-zinc-400 hover:text-brand-400 text-xs">
+                  🔄
+                </button>
+              </div>
+            </div>
+
+            <!-- Sentence 4 (Generating State) -->
+            <div id="row-s4" class="p-3 rounded-xl border border-amber-500/30 bg-amber-500/5 transition-all flex items-start gap-3">
+              <div class="w-8 h-8 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-xs flex-shrink-0 animate-spin">
+                ⏳
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-[10px] font-mono px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400">#004</span>
+                  <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">Dẫn chuyện (Thảo Nhi)</span>
+                  <span class="text-[10px] text-amber-400 font-medium ml-auto flex items-center gap-1 animate-pulse">
+                    Đang sinh âm trên RTX 3060...
+                  </span>
+                </div>
+                <p class="text-sm text-zinc-400 leading-relaxed font-normal">
+                  Phương Mộc không trả lời, ánh mắt cậu vẫn dán chặt vào trang báo cũ ngả màu vàng ố đặt trên bàn.
+                </p>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+      </div>
+
+      <!-- BOTTOM PANEL: WAVEFORM TIMELINE & AUDIO CONTROLLER (160px) -->
+      <footer class="h-44 border-t border-surface-border bg-surface-panel flex flex-col z-20">
+        
+        <!-- Controls Bar -->
+        <div class="h-10 px-4 border-b border-surface-border/70 flex items-center justify-between text-xs bg-surface-card/60">
+          <!-- Playback transport -->
+          <div class="flex items-center gap-3">
+            <button class="p-1 hover:text-white text-zinc-400 transition" title="Lùi lại 1 câu">⏮️</button>
+            <button onclick="toggleMasterPlay()" id="btn-master-play" class="w-7 h-7 rounded-full bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center shadow">
+              ▶️
+            </button>
+            <button class="p-1 hover:text-white text-zinc-400 transition" title="Tới câu tiếp theo">⏭️</button>
+            
+            <div class="flex items-center gap-2 font-mono text-zinc-300 ml-2">
+              <span id="time-current" class="text-white font-semibold">00:03.42</span>
+              <span class="text-zinc-600">/</span>
+              <span id="time-total" class="text-zinc-400">00:07.68</span>
+            </div>
+
+            <!-- Continuous play checkbox -->
+            <label class="flex items-center gap-1.5 text-zinc-400 cursor-pointer ml-4">
+              <input type="checkbox" checked class="rounded border-zinc-700 bg-zinc-800 text-brand-600 focus:ring-0">
+              <span class="text-[11px]">Đọc liên tục (Auto-next)</span>
+            </label>
+          </div>
+
+          <!-- Active Sentence Info -->
+          <div class="text-zinc-400 truncate max-w-md text-[11px]">
+            Đang soi sóng âm câu: <span class="text-zinc-200 font-medium">#001 — Điều Phương Mộc muốn tìm hiểu...</span>
+          </div>
+
+          <!-- Waveform Zoom & Tooling -->
+          <div class="flex items-center gap-3">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[11px] text-zinc-400">Zoom:</span>
+              <input type="range" min="1" max="5" value="2" class="w-20 accent-brand-500 h-1 bg-zinc-700 rounded-lg cursor-pointer">
+            </div>
+            <button class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] border border-surface-border" title="Bôi chọn vùng để cắt">
+              ✂️ Cắt bỏ im lặng
+            </button>
+            <button onclick="regenerateSentence(1)" class="px-2 py-0.5 rounded bg-brand-600/30 hover:bg-brand-600 text-brand-300 hover:text-white text-[11px] border border-brand-500/40 flex items-center gap-1">
+              <span>🔄 Đọc lại câu này</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Waveform Canvas Graphic -->
+        <div class="flex-1 relative bg-[#09090b] flex flex-col justify-center px-4 overflow-hidden">
+          
+          <!-- Ruler / Timeline Scale -->
+          <div class="h-4 w-full flex justify-between text-[9px] font-mono text-zinc-600 border-b border-zinc-800/60 pb-0.5 mb-1">
+            <span>00:00.0</span>
+            <span>00:01.0</span>
+            <span>00:02.0</span>
+            <span>00:03.0</span>
+            <span>00:04.0</span>
+            <span>00:05.0</span>
+            <span>00:06.0</span>
+            <span>00:07.0</span>
+            <span>00:07.6</span>
+          </div>
+
+          <!-- Real Canvas Waveform Simulation -->
+          <div class="relative h-20 w-full flex items-center">
+            <canvas id="waveformCanvas" class="w-full h-full cursor-crosshair"></canvas>
+            
+            <!-- Playhead Needle -->
+            <div id="playhead" class="absolute top-0 bottom-0 w-0.5 bg-rose-500 shadow-sm shadow-rose-500/50 pointer-events-none transition-all duration-75" style="left: 45%;">
+              <div class="w-2.5 h-2.5 -ml-1 bg-rose-500 rotate-45 transform origin-center"></div>
+            </div>
+          </div>
+
+          <!-- Waveform Sub-labels -->
+          <div class="h-4 flex items-center justify-between text-[10px] text-zinc-500 font-mono mt-1">
+            <span>48.000 Hz • 16-bit PCM • Mono</span>
+            <span class="text-emerald-400">Sạch hoàn toàn rè kim loại (Fix3_Crisp)</span>
+            <span>Peak: -1.2 dBFS</span>
+          </div>
+        </div>
+
+      </footer>
+
+    </main>
+
+  </div>
+
+  <!-- ==================== MODALS ==================== -->
+
+  <!-- MODAL 1: EXPORT AUDIO -->
+  <div id="modal-export" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-surface-panel border border-surface-border rounded-xl w-full max-w-lg shadow-2xl p-6 space-y-5">
+      <div class="flex items-center justify-between pb-3 border-b border-surface-border">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <span>💾 Xuất Bản Audio Đã Thu</span>
+        </h3>
+        <button onclick="closeModal('modal-export')" class="text-zinc-400 hover:text-white">✕</button>
+      </div>
+
+      <div class="space-y-4 text-xs">
+        <!-- Scope -->
+        <div>
+          <label class="block font-semibold text-zinc-300 mb-1.5">Phạm vi xuất:</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="flex items-center gap-2 p-2 rounded-lg border border-brand-500/50 bg-brand-500/10 text-white cursor-pointer">
+              <input type="radio" name="export-scope" checked class="text-brand-500">
+              <span>Chương 1 hiện tại (06:24)</span>
+            </label>
+            <label class="flex items-center gap-2 p-2 rounded-lg border border-surface-border bg-surface-card text-zinc-300 cursor-pointer">
+              <input type="radio" name="export-scope" class="text-brand-500">
+              <span>Toàn bộ sách (24 chương)</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Format Selection -->
+        <div>
+          <label class="block font-semibold text-zinc-300 mb-1.5">Định dạng file đầu ra:</label>
+          <div class="grid grid-cols-3 gap-2">
+            <label class="p-2.5 rounded-lg border border-brand-500 bg-brand-500/10 text-white cursor-pointer text-center block">
+              <input type="radio" name="export-fmt" checked class="hidden">
+              <div class="font-bold text-sm">WAV Master</div>
+              <div class="text-[10px] text-zinc-400">48kHz 16-bit Lossless</div>
+            </label>
+            <label class="p-2.5 rounded-lg border border-surface-border bg-surface-card text-zinc-300 cursor-pointer text-center block">
+              <input type="radio" name="export-fmt" class="hidden">
+              <div class="font-bold text-sm">MP3</div>
+              <div class="text-[10px] text-zinc-400">320kbps + ID3 Cover</div>
+            </label>
+            <label class="p-2.5 rounded-lg border border-surface-border bg-surface-card text-zinc-300 cursor-pointer text-center block">
+              <input type="radio" name="export-fmt" class="hidden">
+              <div class="font-bold text-sm">M4B Audiobook</div>
+              <div class="text-[10px] text-purple-400">Có Chapter Cue Markers</div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Pause Adjustments -->
+        <div class="p-3 bg-surface-card rounded-lg border border-surface-border space-y-3">
+          <div class="font-semibold text-zinc-200">Khoảng lặng nghỉ nhịp giữa các câu:</div>
+          <div class="flex items-center justify-between">
+            <span class="text-zinc-400">Khoảng nghỉ giữa 2 câu:</span>
+            <div class="flex items-center gap-2">
+              <input type="range" min="150" max="800" value="350" class="w-32 accent-brand-500">
+              <span class="font-mono text-zinc-200 w-12 text-right">350 ms</span>
+            </div>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-zinc-400">Khoảng nghỉ chuyển đoạn văn:</span>
+            <div class="flex items-center gap-2">
+              <input type="range" min="400" max="1500" value="750" class="w-32 accent-brand-500">
+              <span class="font-mono text-zinc-200 w-12 text-right">750 ms</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Metadata Preview -->
+        <div class="text-[11px] text-zinc-400">
+          File sẽ lưu tại: <code class="text-zinc-200 bg-zinc-800 px-1.5 py-0.5 rounded font-mono">D:\Audiobooks\De_Thi_Dam_Mau_Chuong_1.wav</code>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-3 border-t border-surface-border">
+        <button onclick="closeModal('modal-export')" class="px-4 py-2 rounded-lg border border-surface-border hover:bg-surface-hover text-zinc-300 text-xs">Hủy</button>
+        <button onclick="alert('Đang ghép 85 file câu bằng Rust (hound) và xuất file WAV...'); closeModal('modal-export');" class="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold shadow">
+          Bắt đầu Xuất Audio
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 2: VOICE & ENGINE MANAGER -->
+  <div id="modal-voice" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-surface-panel border border-surface-border rounded-xl w-full max-w-md shadow-2xl p-6 space-y-4">
+      <div class="flex items-center justify-between pb-3 border-b border-surface-border">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <span>⚙️ Cấu Hình Giọng Đọc & Model</span>
+        </h3>
+        <button onclick="closeModal('modal-voice')" class="text-zinc-400 hover:text-white">✕</button>
+      </div>
+
+      <div class="space-y-4 text-xs">
+        <div>
+          <label class="block font-semibold text-zinc-300 mb-1">Engine TTS:</label>
+          <select class="w-full bg-surface-card border border-surface-border rounded-lg p-2 text-zinc-200 focus:outline-none focus:border-brand-500">
+            <option>VieNeu-TTS v3 Turbo 48kHz (Local Server: 8880)</option>
+            <option>Piper VITS ONNX (Embedded Offline CPU)</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-zinc-300 mb-1">Giọng đọc mặc định:</label>
+          <select class="w-full bg-surface-card border border-surface-border rounded-lg p-2 text-zinc-200 focus:outline-none focus:border-brand-500">
+            <option selected>Thảo Nhi (Nữ Nam Bộ ấm áp, đọc song ngữ & trinh thám)</option>
+            <option>Ngọc Lan 18+ (Nữ Bắc Bộ đê mê, rên rỉ khiêu dâm)</option>
+            <option>Hải Đăng (Nam trầm ấm, phát thanh viên)</option>
+          </select>
+        </div>
+
+        <div>
+          <div class="flex justify-between font-semibold text-zinc-300 mb-1">
+            <span>Nhiệt độ (Temperature - Độ ổn định cao độ):</span>
+            <span class="font-mono text-brand-400">0.40</span>
+          </div>
+          <input type="range" min="0.2" max="0.8" step="0.05" value="0.4" class="w-full accent-brand-500">
+          <p class="text-[10px] text-zinc-500 mt-1">Khuyên dùng 0.35 - 0.45 để chống trôi giọng lơ lớ khi đọc tên riêng Hán-Việt.</p>
+        </div>
+
+        <div>
+          <div class="flex justify-between font-semibold text-zinc-300 mb-1">
+            <span>Tốc độ đọc (Speed):</span>
+            <span class="font-mono text-brand-400">1.0x</span>
+          </div>
+          <input type="range" min="0.75" max="1.3" step="0.05" value="1.0" class="w-full accent-brand-500">
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-3 border-t border-surface-border">
+        <button onclick="closeModal('modal-voice')" class="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold">
+          Lưu Cấu Hình
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 3: CHARACTER CASTING -->
+  <div id="modal-cast" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-surface-panel border border-surface-border rounded-xl w-full max-w-lg shadow-2xl p-6 space-y-4">
+      <div class="flex items-center justify-between pb-3 border-b border-surface-border">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <span>🎭 Phân Vai Nhân Vật Trong Sách</span>
+        </h3>
+        <button onclick="closeModal('modal-cast')" class="text-zinc-400 hover:text-white">✕</button>
+      </div>
+
+      <p class="text-xs text-zinc-400">Gán giọng đọc riêng cho từng nhân vật để tạo thành kịch truyền thanh đa vai sống động.</p>
+
+      <div class="space-y-3 text-xs max-h-72 overflow-y-auto pr-1">
+        <!-- Row 1: Narrator -->
+        <div class="p-3 bg-surface-card rounded-lg border border-surface-border flex items-center justify-between">
+          <div>
+            <div class="font-bold text-zinc-200">📖 Lời Dẫn Truyện (Mặc định)</div>
+            <div class="text-[10px] text-zinc-500">Áp dụng cho mọi câu văn miêu tả bối cảnh</div>
+          </div>
+          <select class="bg-zinc-800 border border-zinc-700 rounded p-1.5 text-zinc-200 text-xs">
+            <option selected>Thảo Nhi (Nữ Nam Bộ)</option>
+            <option>Hải Đăng (Nam)</option>
+          </select>
+        </div>
+
+        <!-- Row 2: Character 1 -->
+        <div class="p-3 bg-surface-card rounded-lg border border-surface-border flex items-center justify-between">
+          <div>
+            <div class="font-bold text-zinc-200">👤 Phương Mộc (Nhân vật chính)</div>
+            <div class="text-[10px] text-zinc-500">Nam sinh viên thấu hiểu tâm lý tội phạm</div>
+          </div>
+          <select class="bg-zinc-800 border border-zinc-700 rounded p-1.5 text-zinc-200 text-xs">
+            <option selected>Hải Đăng (Nam trầm)</option>
+            <option>Thảo Nhi (Nữ)</option>
+          </select>
+        </div>
+
+        <!-- Row 3: Character 2 -->
+        <div class="p-3 bg-surface-card rounded-lg border border-surface-border flex items-center justify-between">
+          <div>
+            <div class="font-bold text-zinc-200">👤 Tôn Phổ (Thầy giáo)</div>
+            <div class="text-[10px] text-zinc-500">Giáo sư điềm tĩnh, triết lý</div>
+          </div>
+          <select class="bg-zinc-800 border border-zinc-700 rounded p-1.5 text-zinc-200 text-xs">
+            <option>Hải Đăng (Nam trầm 0.85x)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-between pt-3 border-t border-surface-border">
+        <button class="text-xs text-brand-400 hover:text-brand-300 font-medium">+ Thêm nhân vật mới</button>
+        <button onclick="closeModal('modal-cast')" class="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold">
+          Xác Nhận Phân Vai
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JAVASCRIPT LOGIC & SIMULATION -->
+  <script>
+    // Tab switching
+    function switchTab(tab) {
+      const vDashboard = document.getElementById('view-dashboard');
+      const vStudio = document.getElementById('view-studio');
+      const btnDashboard = document.getElementById('btn-tab-dashboard');
+      const btnStudio = document.getElementById('btn-tab-studio');
+      const topMeta = document.getElementById('top-book-meta');
+
+      if (tab === 'dashboard') {
+        vDashboard.classList.remove('hidden');
+        vStudio.classList.add('hidden');
+        btnDashboard.className = "px-3 py-1 rounded-md text-xs font-medium bg-surface-border text-white transition-colors";
+        btnStudio.className = "px-3 py-1 rounded-md text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-surface-hover transition-colors flex items-center gap-1.5";
+        topMeta.classList.add('opacity-0');
+      } else {
+        vDashboard.classList.add('hidden');
+        vStudio.classList.remove('hidden');
+        btnStudio.className = "px-3 py-1 rounded-md text-xs font-medium bg-surface-border text-white transition-colors flex items-center gap-1.5";
+        btnDashboard.className = "px-3 py-1 rounded-md text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-surface-hover transition-colors";
+        topMeta.classList.remove('opacity-0');
+      }
+    }
+
+    // Modal controls
+    function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
+    function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+    // Sentence selection
+    function selectSentence(id, text, duration) {
+      document.querySelectorAll('#sentence-container > div').forEach(el => {
+        el.classList.remove('border-brand-500/60', 'bg-brand-500/10');
+        el.classList.add('border-surface-border', 'bg-surface-panel');
+      });
+      const target = document.getElementById('row-s' + id);
+      if (target) {
+        target.classList.remove('border-surface-border', 'bg-surface-panel');
+        target.classList.add('border-brand-500/60', 'bg-brand-500/10');
+      }
+      document.getElementById('time-total').innerText = duration;
+      drawWaveform(id);
+    }
+
+    // Master Play toggle
+    let isPlaying = false;
+    let playheadInterval = null;
+    function toggleMasterPlay() {
+      isPlaying = !isPlaying;
+      const btn = document.getElementById('btn-master-play');
+      const playhead = document.getElementById('playhead');
+      if (isPlaying) {
+        btn.innerText = "⏸️";
+        let pos = 10;
+        playheadInterval = setInterval(() => {
+          pos = (pos + 1) % 95;
+          playhead.style.left = pos + '%';
+          const sec = (pos * 0.08).toFixed(2);
+          document.getElementById('time-current').innerText = "00:0" + sec;
+        }, 80);
+      } else {
+        btn.innerText = "▶️";
+        clearInterval(playheadInterval);
+      }
+    }
+
+    function togglePlay(e, id) {
+      e.stopPropagation();
+      toggleMasterPlay();
+    }
+
+    function regenerateSentence(id) {
+      alert("Đang gửi yêu cầu đọc lại câu #" + id + " tới VieNeu-TTS (Giọng Thảo Nhi, temp=0.40)...");
+      const target = document.getElementById('row-s' + id);
+      target.classList.add('animate-pulse');
+      setTimeout(() => {
+        target.classList.remove('animate-pulse');
+        alert("✅ Câu #" + id + " đã được đọc lại thành công!");
+      }, 1500);
+    }
+
+    function startBatchTts() {
+      alert("⚡ Bắt đầu tiến trình sinh âm tự động cho 85 câu trong Chương 1 trên GPU RTX 3060...");
+    }
+
+    // Draw realistic random audio waveform bars on canvas
+    function drawWaveform(seed = 1) {
+      const canvas = document.getElementById('waveformCanvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = canvas.offsetWidth * dpr;
+      canvas.height = canvas.offsetHeight * dpr;
+      ctx.scale(dpr, dpr);
+
+      const width = canvas.offsetWidth;
+      const height = canvas.offsetHeight;
+      const centerY = height / 2;
+
+      ctx.clearRect(0, 0, width, height);
+
+      const barWidth = 3;
+      const barGap = 2;
+      const totalBars = Math.floor(width / (barWidth + barGap));
+
+      for (let i = 0; i < totalBars; i++) {
+        const x = i * (barWidth + barGap);
+        // Pseudo-random speech envelope curve
+        const progress = i / totalBars;
+        let amp = Math.sin(progress * Math.PI) * 0.85;
+        amp *= (0.3 + 0.7 * Math.sin(i * 0.45 + seed * 3.7));
+        if (i % 7 === 0) amp *= 0.15; // occasional silence pause
+
+        const barHeight = Math.max(3, amp * (height * 0.8));
+
+        // Color gradient: Played vs Unplayed
+        if (x < width * 0.45) {
+          ctx.fillStyle = '#ec4899'; // Played (Pink/Purple)
+        } else {
+          ctx.fillStyle = '#6366f1'; // Remaining (Indigo)
+        }
+
+        // Draw symmetric waveform bar
+        ctx.beginPath();
+        ctx.roundRect(x, centerY - barHeight / 2, barWidth, barHeight, 1.5);
+        ctx.fill();
+      }
+    }
+
+    window.addEventListener('resize', () => drawWaveform());
+    setTimeout(() => drawWaveform(), 100);
+  </script>
+</body>
+</html>
