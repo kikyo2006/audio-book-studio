@@ -76,6 +76,7 @@ pub fn run() {
             commands::project::merge_chapters,
             commands::project::add_silence_sentence,
             commands::project::insert_sfx_sentence,
+            commands::project::insert_bgm_sentence,
             commands::project::update_silence_duration,
             commands::project::delete_sentence,
             commands::project::move_sentence,
@@ -88,7 +89,9 @@ pub fn run() {
             commands::project::update_project_status,
             commands::project::get_casting_presets,
             commands::project::save_casting_preset,
-            commands::project::delete_casting_preset
+            commands::project::delete_casting_preset,
+            commands::project::get_project_role_settings,
+            commands::project::save_project_role_settings
         ])
         .run(tauri::generate_context!())
         .expect("Lỗi khởi động ứng dụng Tauri");

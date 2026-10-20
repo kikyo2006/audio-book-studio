@@ -25,6 +25,12 @@ pub async fn synthesize_sentence(
     app_handle: AppHandle,
     db: State<'_, Arc<Database>>,
 ) -> Result<TtsSentenceResult, String> {
+    // Khoảng lặng / hiệu ứng có audio tạo riêng, không được đọc bằng TTS (kẻo ghi đè file im lặng
+    // thành giọng đọc "Khoảng lặng 45 giây"). Phải chặn trước khi xóa file âm thanh cũ.
+    if text.starts_with("[Khoảng lặng") || text.starts_with("[Hiệu ứng:") {
+        return Err("Câu khoảng lặng / hiệu ứng không được đọc bằng TTS".to_string());
+    }
+
     let app_dir = app_handle
         .path()
         .app_data_dir()

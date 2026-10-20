@@ -27,7 +27,7 @@ export const InsertParagraphModal: React.FC<InsertParagraphModalProps> = ({
   } = useProjectStore();
 
   const [count, setCount] = useState<number>(1);
-  const [position, setPosition] = useState<"before" | "after">("before");
+  const [position, setPosition] = useState<"before" | "after">("after");
   const [targetLine, setTargetLine] = useState<number>(1);
   const [isWorking, setIsWorking] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -38,7 +38,7 @@ export const InsertParagraphModal: React.FC<InsertParagraphModalProps> = ({
       const selected = sentences.find((s) => s.id === selectedSentenceId);
       setTargetLine(selected ? selected.index : 1);
       setCount(1);
-      setPosition("before");
+      setPosition("after");
       setErrorMessage(null);
     }
   }, [isOpen, selectedSentenceId, sentences]);
@@ -187,7 +187,12 @@ export const InsertParagraphModal: React.FC<InsertParagraphModalProps> = ({
 
           {/* Position: Before or After */}
           <div className="space-y-1.5">
-            <label className="font-medium text-zinc-300">Vị trí chèn:</label>
+            <label
+              className="font-medium text-zinc-300"
+              style={{ display: "block", marginBottom: 10 }}
+            >
+              Vị trí chèn:
+            </label>
             <div className="grid grid-cols-2 gap-2.5">
               <button
                 type="button"

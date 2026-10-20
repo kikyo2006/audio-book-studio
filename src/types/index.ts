@@ -149,6 +149,13 @@ export interface RoleVoiceSetting {
   temperature: number;
 }
 
+// Thiết lập vai hệ thống của dự án (lưu trong DB)
+export interface ProjectRoleSettings {
+  narrator: RoleVoiceSetting;
+  dialogue: RoleVoiceSetting;
+  preset_id?: string | null;
+}
+
 export interface PresetCharacter {
   id: string;
   name: string;

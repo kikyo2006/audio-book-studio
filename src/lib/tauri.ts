@@ -6,6 +6,7 @@ import type {
   EbookParsedData,
   MergeChaptersResult,
   ProjectMetadata,
+  ProjectRoleSettings,
   SentenceItem,
   TtsSentenceResult,
 } from "@/types";
@@ -533,6 +534,39 @@ export async function tauriAddSilenceSentence(params: {
   });
 }
 
+export async function tauriInsertBgmSentence(params: {
+  projectId: string;
+  chapterId: string;
+  targetSentenceId: string;
+  position: "above" | "below";
+  bgmPath: string;
+  bgmName: string;
+  startSecs: number;
+  cutSecs: number;
+  targetSecs: number;
+  fadeInSecs: number;
+  fadeOutSecs: number;
+  volume: number;
+}): Promise<SentenceItem> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Chèn nhạc nền chỉ khả dụng trên desktop app.");
+  }
+  return await invoke<SentenceItem>("insert_bgm_sentence", {
+    projectId: params.projectId,
+    chapterId: params.chapterId,
+    targetSentenceId: params.targetSentenceId,
+    position: params.position,
+    bgmPath: params.bgmPath,
+    bgmName: params.bgmName,
+    startSecs: params.startSecs,
+    cutSecs: params.cutSecs,
+    targetSecs: params.targetSecs,
+    fadeInSecs: params.fadeInSecs,
+    fadeOutSecs: params.fadeOutSecs,
+    volume: params.volume,
+  });
+}
+
 export async function tauriInsertSfxSentence(params: {
   projectId: string;
   chapterId: string;
@@ -714,6 +748,37 @@ export async function tauriSaveCastingPreset(preset: CastingPreset): Promise<voi
     return;
   }
   await invoke("save_casting_preset", { preset });
+}
+
+const roleSettingsKey = (projectId: string) => `bookstudio_role_settings_${projectId}`;
+
+export async function tauriGetProjectRoleSettings(
+  projectId: string
+): Promise<ProjectRoleSettings | null> {
+  if (!isTauriEnvironment()) {
+    try {
+      const stored = localStorage.getItem(roleSettingsKey(projectId));
+      return stored ? (JSON.parse(stored) as ProjectRoleSettings) : null;
+    } catch {
+      return null;
+    }
+  }
+  return await invoke<ProjectRoleSettings | null>("get_project_role_settings", { projectId });
+}
+
+export async function tauriSaveProjectRoleSettings(
+  projectId: string,
+  settings: ProjectRoleSettings
+): Promise<void> {
+  if (!isTauriEnvironment()) {
+    try {
+      localStorage.setItem(roleSettingsKey(projectId), JSON.stringify(settings));
+    } catch (err) {
+      console.warn("Lưu thiết lập vai vào localStorage lỗi:", err);
+    }
+    return;
+  }
+  await invoke("save_project_role_settings", { projectId, settings });
 }
 
 export async function tauriDeleteCastingPreset(presetId: string): Promise<void> {

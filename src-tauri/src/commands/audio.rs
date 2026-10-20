@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::db::Database;
-use crate::services::audio::AudioConcatenateOptions;
+use crate::services::audio::{item_kind_from_text, AudioConcatenateOptions, ItemKind};
 
 #[tauri::command]
 pub async fn export_chapter_audio(
@@ -30,13 +30,16 @@ pub async fn export_chapter_audio(
 
         let sentences = db.get_sentences(&chapter_id)?;
         let mut audio_items: Vec<(PathBuf, f32)> = Vec::new();
+        let mut item_kinds: Vec<ItemKind> = Vec::new();
 
         for s in sentences {
+            let kind = item_kind_from_text(&s.clean_text);
             if let Some(path_str) = s.audio_path {
                 let p = PathBuf::from(path_str);
                 if p.exists() {
                     let rate = s.speed.unwrap_or(1.0);
                     audio_items.push((p, rate));
+                    item_kinds.push(kind);
                 }
             }
         }
@@ -63,13 +66,22 @@ pub async fn export_chapter_audio(
 
             crate::services::audio::concatenate_sentence_wavs_with_bgm(
                 &audio_items,
+                &item_kinds,
                 target,
                 &opts,
                 bgm_opt.as_deref(),
                 vol,
             )
         } else {
-            crate::services::audio::concatenate_sentence_wavs(&audio_items, target, &opts)
+            // Không có BGM tổng vẫn dùng bản có item_kinds để khoảng lặng / hiệu ứng không bị time-stretch
+            crate::services::audio::concatenate_sentence_wavs_with_bgm(
+                &audio_items,
+                &item_kinds,
+                target,
+                &opts,
+                None,
+                0.0,
+            )
         }
     })
     .await
@@ -115,12 +127,15 @@ pub async fn export_book_audio(
             };
 
             let mut audio_items: Vec<(PathBuf, f32)> = Vec::new();
+            let mut item_kinds: Vec<ItemKind> = Vec::new();
             for s in sentences {
+                let kind = item_kind_from_text(&s.clean_text);
                 if let Some(path_str) = s.audio_path {
                     let p = PathBuf::from(path_str);
                     if p.exists() {
                         let rate = s.speed.unwrap_or(1.0);
                         audio_items.push((p, rate));
+                        item_kinds.push(kind);
                     }
                 }
             }
@@ -139,16 +154,20 @@ pub async fn export_book_audio(
                 });
                 crate::services::audio::concatenate_sentence_wavs_with_bgm(
                     &audio_items,
+                    &item_kinds,
                     &temp_chap_file,
                     &opts,
                     bgm_opt.as_deref(),
                     vol,
                 )
             } else {
-                crate::services::audio::concatenate_sentence_wavs(
+                crate::services::audio::concatenate_sentence_wavs_with_bgm(
                     &audio_items,
+                    &item_kinds,
                     &temp_chap_file,
                     &opts,
+                    None,
+                    0.0,
                 )
             };
 
@@ -224,12 +243,15 @@ pub async fn export_batch_chapters(
             };
 
             let mut audio_items: Vec<(PathBuf, f32)> = Vec::new();
+            let mut item_kinds: Vec<ItemKind> = Vec::new();
             for s in sentences {
+                let kind = item_kind_from_text(&s.clean_text);
                 if let Some(path_str) = s.audio_path {
                     let p = PathBuf::from(path_str);
                     if p.exists() {
                         let rate = s.speed.unwrap_or(1.0);
                         audio_items.push((p, rate));
+                        item_kinds.push(kind);
                     }
                 }
             }
@@ -254,16 +276,20 @@ pub async fn export_batch_chapters(
                 });
                 crate::services::audio::concatenate_sentence_wavs_with_bgm(
                     &audio_items,
+                    &item_kinds,
                     &target_file,
                     &opts,
                     bgm_opt.as_deref(),
                     vol,
                 )
             } else {
-                crate::services::audio::concatenate_sentence_wavs(
+                crate::services::audio::concatenate_sentence_wavs_with_bgm(
                     &audio_items,
+                    &item_kinds,
                     &target_file,
                     &opts,
+                    None,
+                    0.0,
                 )
             };
 

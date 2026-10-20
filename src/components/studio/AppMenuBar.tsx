@@ -28,6 +28,7 @@ import { useStudioSettingsStore } from "@/stores/useStudioSettingsStore";
 import { useFindReplaceStore } from "@/stores/useFindReplaceStore";
 import { useConfirmStore } from "@/stores/useConfirmStore";
 import { tauriCheckTtsConnection, tauriDeleteProject } from "@/lib/tauri";
+import { WAVEFORM_ZOOM_MAX, WAVEFORM_ZOOM_MIN } from "@/lib/utils";
 import type { ProjectMetadata } from "@/types";
 
 interface AppMenuBarProps {
@@ -545,7 +546,7 @@ export const AppMenuBar: React.FC<AppMenuBarProps> = ({
             <button
               type="button"
               onClick={() => {
-                setWaveformZoom(Math.min(140, waveformZoom + 15));
+                setWaveformZoom(Math.min(WAVEFORM_ZOOM_MAX, waveformZoom + 15));
               }}
               className="w-full px-2.5 py-1.5 rounded-lg text-left text-xs flex items-center justify-between hover:bg-zinc-800 hover:text-white transition-colors"
             >
@@ -559,7 +560,7 @@ export const AppMenuBar: React.FC<AppMenuBarProps> = ({
             <button
               type="button"
               onClick={() => {
-                setWaveformZoom(Math.max(10, waveformZoom - 15));
+                setWaveformZoom(Math.max(WAVEFORM_ZOOM_MIN, waveformZoom - 15));
               }}
               className="w-full px-2.5 py-1.5 rounded-lg text-left text-xs flex items-center justify-between hover:bg-zinc-800 hover:text-white transition-colors"
             >

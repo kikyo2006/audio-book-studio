@@ -19,6 +19,7 @@ import {
   FileText,
   FilePlus,
   Sparkles,
+  Music,
   CloudRain,
   User,
   Home,
@@ -27,6 +28,7 @@ import {
   Ghost,
 } from "lucide-react";
 import { SFX_CATALOG, SfxGroup, SfxItem } from "@/data/sfxCatalog";
+import { isNonSpeechSentenceText } from "@/lib/utils";
 import type { CharacterProfile, SentenceItem } from "@/types";
 
 export interface ContextMenuState {
@@ -54,6 +56,10 @@ interface SentenceContextMenuProps {
     sentence: SentenceItem,
     position: "above" | "below"
   ) => void;
+  onInsertBgm: (
+    sentence: SentenceItem,
+    position: "above" | "below"
+  ) => void;
   onOpenInsertModal: (sentence: SentenceItem) => void;
   onMoveSentence: (
     sentence: SentenceItem,
@@ -77,6 +83,7 @@ export const SentenceContextMenu: React.FC<SentenceContextMenuProps> = ({
   onAddSilence,
   onSelectSfx,
   onInsertBlank,
+  onInsertBgm,
   onOpenInsertModal,
   onMoveSentence,
   onOpenMoveModal,
@@ -132,7 +139,8 @@ export const SentenceContextMenu: React.FC<SentenceContextMenuProps> = ({
   const hasEnoughRightSpaceForLevel1 = posX + menuWidth + 250 <= window.innerWidth;
   const hasEnoughRightSpaceForLevel2 = posX + menuWidth + 250 + 320 <= window.innerWidth;
 
-  const isSilence = menu.sentence.clean_text.startsWith("[Khoảng lặng");
+  // Khoảng lặng / hiệu ứng / nhạc nền không có tác vụ tái tạo, sửa chữ hay gán vai
+  const isSilence = isNonSpeechSentenceText(menu.sentence.clean_text);
 
   const getSubmenuStyle = (level: 1 | 2 = 1): React.CSSProperties => {
     const flipLeft = level === 1 ? !hasEnoughRightSpaceForLevel1 : !hasEnoughRightSpaceForLevel2;
@@ -374,6 +382,56 @@ export const SentenceContextMenu: React.FC<SentenceContextMenuProps> = ({
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+
+        {/* Submenu Background Music (BGM chèn: BGM tổng của chương tắt tiếng trong lúc dòng này chạy) */}
+        <div
+          className="relative"
+          onMouseEnter={() => setActiveSubmenu("bgm")}
+        >
+          <button
+            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors font-medium cursor-pointer ${
+              activeSubmenu === "bgm"
+                ? "bg-zinc-700 text-white"
+                : "text-zinc-200 hover:bg-zinc-700/80 hover:text-white"
+            }`}
+          >
+            <div className="flex items-center gap-2 text-emerald-400">
+              <Music className="w-3.5 h-3.5 shrink-0" />
+              <span className="text-zinc-100">Nhạc nền (BGM)</span>
+            </div>
+            <ChevronRight className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+          </button>
+
+          {activeSubmenu === "bgm" && (
+            <div
+              style={getSubmenuStyle(1)}
+              className="border rounded-xl p-1.5 text-xs text-zinc-200 select-none shadow-2xl"
+            >
+              <button
+                onClick={() => {
+                  onInsertBgm(menu.sentence, "above");
+                  onClose();
+                  setActiveSubmenu(null);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-colors cursor-pointer text-zinc-300 hover:bg-zinc-700/80 hover:text-white whitespace-nowrap"
+              >
+                <ArrowUp className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Chèn phía trên (Above)</span>
+              </button>
+              <button
+                onClick={() => {
+                  onInsertBgm(menu.sentence, "below");
+                  onClose();
+                  setActiveSubmenu(null);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-colors cursor-pointer text-zinc-300 hover:bg-zinc-700/80 hover:text-white whitespace-nowrap"
+              >
+                <ArrowDown className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Chèn phía dưới (Below)</span>
+              </button>
             </div>
           )}
         </div>
@@ -696,7 +754,7 @@ export const SentenceContextMenu: React.FC<SentenceContextMenuProps> = ({
           className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left transition-colors cursor-pointer text-rose-400 hover:text-rose-100 hover:bg-rose-600/25"
         >
           <Trash2 className="w-3.5 h-3.5" />
-          <span>Xóa câu này</span>
+          <span>Xóa câu này (Delete)</span>
         </button>
       </div>
     </>,

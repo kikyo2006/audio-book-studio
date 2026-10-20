@@ -30,3 +30,25 @@ export function formatTimeHours(seconds: number): string {
 
 /** Max characters per sentence (matches the 350-char split limit in the Rust tokenizer) */
 export const MAX_SENTENCE_CHARS = 350;
+
+/**
+ * Câu khoảng lặng / hiệu ứng âm thanh: audio được tạo riêng (WAV im lặng / SFX),
+ * tuyệt đối KHÔNG gửi text của các câu này cho TTS đọc.
+ */
+export function isNonSpeechSentenceText(text: string | undefined | null): boolean {
+  const t = text ?? "";
+  return (
+    t.startsWith("[Khoảng lặng") ||
+    t.startsWith("[Hiệu ứng:") ||
+    t.startsWith("[Nhạc nền:")
+  );
+}
+
+/** Dòng nhạc nền chèn (BGM tổng của chương tắt tiếng trong lúc dòng này chạy khi ghép) */
+export function isBgmSentenceText(text: string | undefined | null): boolean {
+  return (text ?? "").startsWith("[Nhạc nền:");
+}
+
+// Giới hạn zoom sóng âm (pixel / giây), dùng chung cho lăn chuột và menu
+export const WAVEFORM_ZOOM_MIN = 10;
+export const WAVEFORM_ZOOM_MAX = 300;

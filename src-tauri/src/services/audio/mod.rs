@@ -8,6 +8,17 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
+mod bgm_item;
+pub use bgm_item::trim_and_export_bgm_wav;
+#[cfg(test)]
+mod tests;
+
+/// Sample rate của file khoảng lặng và nhạc nền chèn (khớp VieNeu-TTS v3 Turbo)
+pub const SILENCE_SAMPLE_RATE: u32 = 48_000;
+const BGM_ITEM_SAMPLE_RATE: u32 = 48_000;
+/// Độ dài tối đa một dòng nhạc nền chèn (giây)
+const MAX_BGM_ITEM_SECS: f64 = 3600.0;
+
 pub struct AudioConcatenateOptions {
     pub sentence_pause_ms: u32,
     pub paragraph_pause_ms: u32,
@@ -261,16 +272,63 @@ pub fn time_stretch_sola(samples: &[i16], sample_rate: u32, speed: f32) -> Vec<i
     out
 }
 
+/// Loại dòng trong kịch bản khi ghép audio
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemKind {
+    /// Câu đọc bằng TTS (áp dụng Speak Rate)
+    Speech,
+    /// Khoảng lặng / hiệu ứng: không bao giờ time-stretch
+    Effect,
+    /// Dòng nhạc nền chèn: không time-stretch và BGM tổng bị tắt tiếng trong lúc dòng này chạy
+    Music,
+}
+
+/// Xác định loại dòng từ chữ hiển thị của câu
+pub fn item_kind_from_text(text: &str) -> ItemKind {
+    if text.starts_with("[Nhạc nền:") {
+        ItemKind::Music
+    } else if text.starts_with("[Khoảng lặng") || text.starts_with("[Hiệu ứng:") {
+        ItemKind::Effect
+    } else {
+        ItemKind::Speech
+    }
+}
+
+fn item_kind_from_text_or_default(item_kinds: &[ItemKind], idx: usize) -> ItemKind {
+    item_kinds.get(idx).copied().unwrap_or(ItemKind::Speech)
+}
+
+/// Hệ số nhân (0.0 - 1.0) của BGM tổng tại mẫu `idx` quanh một đoạn tắt tiếng [start, end),
+/// có ramp `ramp` mẫu ở hai đầu để không bị nổ tiếng
+fn span_gain(idx: usize, start: usize, end: usize, ramp: usize) -> f32 {
+    if idx >= start && idx < end {
+        return 0.0;
+    }
+    if ramp == 0 {
+        return 1.0;
+    }
+    if idx < start && start - idx < ramp {
+        return (start - idx) as f32 / ramp as f32;
+    }
+    if idx >= end && idx - end < ramp {
+        return (idx - end) as f32 / ramp as f32;
+    }
+    1.0
+}
+
 pub fn concatenate_sentence_wavs(
     input_wav_items: &[(PathBuf, f32)],
     output_path: &Path,
     options: &AudioConcatenateOptions,
 ) -> Result<f64, String> {
-    concatenate_sentence_wavs_with_bgm(input_wav_items, output_path, options, None, 0.2)
+    concatenate_sentence_wavs_with_bgm(input_wav_items, &[], output_path, options, None, 0.2)
 }
 
+/// `item_kinds[i]` là loại của `input_wav_items[i]` (thiếu thì coi là `Speech`).
+/// Mọi file đầu vào được resample về sample rate của file đầu tiên trước khi nối.
 pub fn concatenate_sentence_wavs_with_bgm(
     input_wav_items: &[(PathBuf, f32)],
+    item_kinds: &[ItemKind],
     output_path: &Path,
     options: &AudioConcatenateOptions,
     bgm_path: Option<&Path>,
@@ -295,6 +353,8 @@ pub fn concatenate_sentence_wavs_with_bgm(
         (target_spec.sample_rate as f32 * (options.sentence_pause_ms as f32 / 1000.0)) as usize;
 
     let mut voice_samples: Vec<i16> = Vec::new();
+    // Các đoạn [start, end) (tính theo mẫu) mà BGM tổng phải tắt tiếng (dòng nhạc nền chèn)
+    let mut music_spans: Vec<(usize, usize)> = Vec::new();
 
     for (idx, (path, speed)) in input_wav_items.iter().enumerate() {
         if !path.exists() {
@@ -307,6 +367,7 @@ pub fn concatenate_sentence_wavs_with_bgm(
             Ok(r) => r,
             Err(_) => continue,
         };
+        let file_sample_rate = reader.spec().sample_rate;
 
         let mut sentence_samples = Vec::new();
 
@@ -328,15 +389,36 @@ pub fn concatenate_sentence_wavs_with_bgm(
             }
         }
 
-        // Áp dụng Speak Rate (SOLA time-stretch) cho từng câu thoại riêng biệt
+        // Khoảng lặng / hiệu ứng thường 24kHz trong khi giọng đọc 48kHz: resample về cùng sample rate,
+        // nếu không đoạn này bị ngắn đi và cao lên (VD: khoảng lặng 45s chỉ còn 22.5s)
+        if file_sample_rate != target_spec.sample_rate && file_sample_rate > 0 && !sentence_samples.is_empty() {
+            let as_float: Vec<f32> = sentence_samples.iter().map(|&s| s as f32 / 32768.0).collect();
+            let resampled = resample_linear(&as_float, file_sample_rate, target_spec.sample_rate);
+            sentence_samples = resampled
+                .iter()
+                .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0).round() as i16)
+                .collect();
+        }
+
+        let kind = item_kind_from_text_or_default(item_kinds, idx);
+
+        // Áp dụng Speak Rate (SOLA time-stretch) chỉ cho câu đọc TTS, không đụng khoảng lặng / hiệu ứng / nhạc
         let rate = *speed;
-        let stretched = if (rate - 1.0).abs() >= 0.02 && rate >= 0.3 && rate <= 3.0 {
+        let stretched = if kind == ItemKind::Speech
+            && (rate - 1.0).abs() >= 0.02
+            && rate >= 0.3
+            && rate <= 3.0
+        {
             time_stretch_sola(&sentence_samples, target_spec.sample_rate, rate)
         } else {
             sentence_samples
         };
 
+        let span_start = voice_samples.len();
         voice_samples.extend(stretched);
+        if kind == ItemKind::Music {
+            music_spans.push((span_start, voice_samples.len()));
+        }
 
         // Chèn khoảng lặng giữa các câu (trừ câu cuối cùng)
         if idx + 1 < input_wav_items.len() {
@@ -379,6 +461,10 @@ pub fn concatenate_sentence_wavs_with_bgm(
 
     if let Some(bgm_data) = bgm_resampled {
         let bgm_len = bgm_data.len();
+        // Ramp 0.2s ở hai đầu đoạn nhạc nền chèn để BGM tổng tắt / bật lại êm
+        let duck_ramp = (target_spec.sample_rate as f32 * 0.2) as usize;
+        let mut span_ptr = 0usize;
+
         for (idx, &v_int) in voice_samples.iter().enumerate() {
             let v_float = v_int as f32 / 32768.0;
             let raw_b = if bgm_len > 0 { bgm_data[idx % bgm_len] } else { 0.0 };
@@ -390,7 +476,18 @@ pub fn concatenate_sentence_wavs_with_bgm(
                 1.0f32
             };
 
-            let b_float = raw_b * bgm_volume * fade_factor;
+            // Bỏ qua các đoạn nhạc nền đã đi qua hẳn (kể cả ramp)
+            while span_ptr < music_spans.len() && idx >= music_spans[span_ptr].1 + duck_ramp {
+                span_ptr += 1;
+            }
+            // Hai đoạn liền kề có thể chồng ramp nên lấy hệ số nhỏ nhất của đoạn hiện tại và đoạn kế
+            let mut duck_factor = 1.0f32;
+            for &(s, e) in music_spans.iter().skip(span_ptr).take(2) {
+                duck_factor = duck_factor.min(span_gain(idx, s, e, duck_ramp));
+            }
+
+            // bgm_volume là mức người dùng đặt (VD 0.15 = 15%), duck_factor chỉ tắt tạm rồi trở về đúng mức đó
+            let b_float = raw_b * bgm_volume * fade_factor * duck_factor;
             let mixed_float = (v_float + b_float).clamp(-1.0, 1.0);
             let mixed_int = (mixed_float * 32767.0).round() as i16;
 
@@ -414,15 +511,16 @@ pub fn generate_silence_wav(output_path: &Path, duration_secs: f64) -> Result<()
     if let Some(parent) = output_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    // 48kHz để khớp giọng đọc VieNeu-TTS v3 Turbo (khi ghép vẫn resample nếu lệch)
     let spec = hound::WavSpec {
         channels: 1,
-        sample_rate: 24000,
+        sample_rate: SILENCE_SAMPLE_RATE,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
     let mut writer = hound::WavWriter::create(output_path, spec)
         .map_err(|e| format!("Lỗi tạo file silence WAV: {}", e))?;
-    let total_samples = (24000.0 * duration_secs.max(0.1)) as usize;
+    let total_samples = (SILENCE_SAMPLE_RATE as f64 * duration_secs.max(0.1)) as usize;
     for _ in 0..total_samples {
         writer.write_sample(0i16).map_err(|e| e.to_string())?;
     }

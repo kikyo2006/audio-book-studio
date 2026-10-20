@@ -34,13 +34,13 @@ import { InsertParagraphModal } from "@/components/studio/InsertParagraphModal";
 import { ShortcutsModal } from "@/components/studio/ShortcutsModal";
 import { ConfirmModal } from "@/components/studio/ConfirmModal";
 import { ProjectCard } from "@/components/studio/ProjectCard";
+import { useTtsHealth } from "@/hooks/useTtsHealth";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useStudioSettingsStore } from "@/stores/useStudioSettingsStore";
 import { useFindReplaceStore } from "@/stores/useFindReplaceStore";
 import { useConfirmStore } from "@/stores/useConfirmStore";
 import {
   isTauriEnvironment,
-  tauriCheckTtsConnection,
   tauriDeleteProject,
   tauriGetChapters,
   tauriGetProjectCharacters,
@@ -79,22 +79,8 @@ export default function Home() {
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "completed" | "dropped">("all");
   const [isRefreshingProjects, setIsRefreshingProjects] = useState(false);
 
-  const { serverUrl, isServerOnline, setIsServerOnline } =
-    useStudioSettingsStore();
-  const [isCheckingTts, setIsCheckingTts] = useState(false);
-
-  const checkHealth = async () => {
-    setIsCheckingTts(true);
-    const online = await tauriCheckTtsConnection(serverUrl);
-    setIsServerOnline(online);
-    setIsCheckingTts(false);
-  };
-
-  useEffect(() => {
-    checkHealth();
-    const interval = setInterval(checkHealth, 15000);
-    return () => clearInterval(interval);
-  }, [serverUrl]);
+  const { isServerOnline } = useStudioSettingsStore();
+  const { isCheckingTts, checkHealth } = useTtsHealth(true);
 
   const {
     isOpen: isFindReplaceOpen,

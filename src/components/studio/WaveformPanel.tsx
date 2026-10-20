@@ -7,8 +7,6 @@ import {
   Play,
   Pause,
   Square,
-  ZoomIn,
-  ZoomOut,
   Volume2,
   VolumeX,
   Repeat,
@@ -30,7 +28,12 @@ import {
   tauriSelectBgmFile,
   tauriUpdateChapterBgm,
 } from "@/lib/tauri";
-import { formatDuration } from "@/lib/utils";
+import {
+  formatDuration,
+  isBgmSentenceText,
+  WAVEFORM_ZOOM_MAX,
+  WAVEFORM_ZOOM_MIN,
+} from "@/lib/utils";
 
 interface TrackVolumePopoverProps {
   volume: number;
@@ -230,7 +233,6 @@ export const WaveformPanel: React.FC = () => {
     continuousPlay,
     waveformZoom,
     setContinuousPlay,
-    setWaveformZoom,
   } = useStudioSettingsStore();
 
   // Selection target: "voice" | "bgm"
@@ -260,6 +262,11 @@ export const WaveformPanel: React.FC = () => {
   const [clipboardNotice, setClipboardNotice] = useState<string | null>(null);
 
   const activeSentence = sentences.find((s) => s.id === selectedSentenceId);
+
+  // Dòng nhạc nền chèn: nghe riêng, BGM tổng của chương không phát cùng (khi xuất nó tắt tiếng đoạn này)
+  const isActiveBgmItem = isBgmSentenceText(activeSentence?.clean_text);
+  const isActiveBgmItemRef = useRef(isActiveBgmItem);
+  isActiveBgmItemRef.current = isActiveBgmItem;
 
   const continuousPlayRef = useRef(continuousPlay);
   continuousPlayRef.current = continuousPlay;
@@ -358,7 +365,7 @@ export const WaveformPanel: React.FC = () => {
     ws.on("play", () => {
       setIsPlaying(true);
       // Đồng bộ phát BGM nếu có
-      if (bgmWsRef.current && !isBgmMutedRef.current) {
+      if (bgmWsRef.current && !isBgmMutedRef.current && !isActiveBgmItemRef.current) {
         try {
           bgmWsRef.current.setVolume(bgmVolumeRef.current);
           bgmWsRef.current.play();
@@ -502,7 +509,40 @@ export const WaveformPanel: React.FC = () => {
     };
   }, []);
 
-  // Update zoom when slider changes
+  // Lăn chuột trên vùng sóng âm để zoom (lăn lên = phóng to, lăn xuống = thu nhỏ)
+  useEffect(() => {
+    const containers = [voiceContainerRef.current, bgmContainerRef.current].filter(
+      (el): el is HTMLDivElement => el !== null
+    );
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY === 0) return;
+      e.preventDefault();
+      const { waveformZoom: current, setWaveformZoom: setZoom } =
+        useStudioSettingsStore.getState();
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const next = Math.min(
+        WAVEFORM_ZOOM_MAX,
+        Math.max(WAVEFORM_ZOOM_MIN, Math.round(current * factor))
+      );
+      // Đảm bảo luôn nhích ít nhất 1 đơn vị khi chưa chạm biên
+      const adjusted =
+        next === Math.round(current)
+          ? Math.min(
+              WAVEFORM_ZOOM_MAX,
+              Math.max(WAVEFORM_ZOOM_MIN, current + (e.deltaY < 0 ? 1 : -1))
+            )
+          : next;
+      if (adjusted !== current) setZoom(adjusted);
+    };
+
+    containers.forEach((el) => el.addEventListener("wheel", handleWheel, { passive: false }));
+    return () => {
+      containers.forEach((el) => el.removeEventListener("wheel", handleWheel));
+    };
+  }, []);
+
+  // Áp dụng zoom lên cả 2 track khi waveformZoom thay đổi
   useEffect(() => {
     if (voiceWsRef.current) {
       try {
@@ -582,7 +622,7 @@ export const WaveformPanel: React.FC = () => {
           setPlaybackRate(sentenceRate);
           voiceWsRef.current.setPlaybackRate(sentenceRate, true);
           voiceWsRef.current.play();
-          if (bgmWsRef.current && !isBgmMuted && activeChapter?.bgm_path) {
+          if (bgmWsRef.current && !isBgmMuted && !isActiveBgmItem && activeChapter?.bgm_path) {
             bgmWsRef.current.setVolume(bgmVolume);
             bgmWsRef.current.play();
           }
@@ -669,7 +709,7 @@ export const WaveformPanel: React.FC = () => {
       } else {
         setPlayingSentenceId(activeSentence.id);
         voiceWsRef.current.play();
-        if (bgmWsRef.current && !isBgmMuted && activeChapter?.bgm_path) {
+        if (bgmWsRef.current && !isBgmMuted && !isActiveBgmItem && activeChapter?.bgm_path) {
           bgmWsRef.current.setVolume(bgmVolume);
           bgmWsRef.current.play();
         }
@@ -878,15 +918,6 @@ export const WaveformPanel: React.FC = () => {
     }
   };
 
-  const handleRateChange = (rate: number) => {
-    setPlaybackRate(rate);
-    try {
-      voiceWsRef.current?.setPlaybackRate(rate);
-      bgmWsRef.current?.setPlaybackRate(rate);
-    } catch {
-      // ignore
-    }
-  };
 
   const bgmFileName = activeChapter?.bgm_path
     ? activeChapter.bgm_path.split(/[/\\]/).pop()
@@ -1063,49 +1094,6 @@ export const WaveformPanel: React.FC = () => {
               Chọn Câu hoặc BGM rồi nhấn &quot;Chọn vùng&quot; (kéo 2 đầu để căn chỉnh)
             </span>
           )}
-        </div>
-
-        {/* Right: Playback Rate & Waveform Zoom */}
-        <div className="flex items-center gap-3">
-          {/* Rate */}
-          <div className="flex items-center gap-1 text-xs text-zinc-400">
-            <span className="text-[10px] text-zinc-500 font-mono mr-0.5">Tốc độ:</span>
-            {[0.85, 0.9, 1.0, 1.15, 1.25].map((rate) => (
-              <button
-                key={rate}
-                onClick={() => handleRateChange(rate)}
-                className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors ${
-                  Math.abs(playbackRate - rate) < 0.02
-                    ? "bg-indigo-600 text-white font-medium"
-                    : "hover:bg-zinc-800 text-zinc-400"
-                }`}
-              >
-                {rate}x
-              </button>
-            ))}
-            {![0.85, 0.9, 1.0, 1.15, 1.25].some((r) => Math.abs(playbackRate - r) < 0.02) && (
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-600 text-white font-medium">
-                {playbackRate.toFixed(2)}x
-              </span>
-            )}
-          </div>
-
-          <div className="h-4 w-px bg-zinc-800" />
-
-          {/* Zoom Slider */}
-          <div className="flex items-center gap-1.5 text-xs text-zinc-400">
-            <ZoomOut className="w-3 h-3 text-zinc-500" />
-            <input
-              type="range"
-              min={10}
-              max={140}
-              value={waveformZoom}
-              onChange={(e) => setWaveformZoom(Number(e.target.value))}
-              className="w-16 accent-indigo-500 h-1 bg-zinc-800 rounded cursor-pointer"
-              title="Phóng to / thu nhỏ sóng âm"
-            />
-            <ZoomIn className="w-3 h-3 text-zinc-500" />
-          </div>
         </div>
       </div>
 

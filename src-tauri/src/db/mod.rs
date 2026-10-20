@@ -117,6 +117,23 @@ impl Database {
         )
         .map_err(|e| format!("Lỗi tạo bảng casting_presets: {}", e))?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS project_role_settings (
+                project_id TEXT PRIMARY KEY,
+                narrator_voice TEXT NOT NULL,
+                narrator_speed REAL NOT NULL DEFAULT 1.0,
+                narrator_temperature REAL NOT NULL DEFAULT 0.45,
+                dialogue_voice TEXT NOT NULL,
+                dialogue_speed REAL NOT NULL DEFAULT 1.0,
+                dialogue_temperature REAL NOT NULL DEFAULT 0.45,
+                preset_id TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );",
+            [],
+        )
+        .map_err(|e| format!("Lỗi tạo bảng project_role_settings: {}", e))?;
+
         let _ = conn.execute("ALTER TABLE chapters ADD COLUMN bgm_path TEXT;", []);
         let _ = conn.execute("ALTER TABLE chapters ADD COLUMN bgm_volume REAL DEFAULT 0.2;", []);
         let _ = conn.execute("ALTER TABLE chapters ADD COLUMN is_enabled INTEGER DEFAULT 1;", []);
@@ -271,7 +288,16 @@ impl Database {
     pub fn get_chapters(&self, project_id: &str) -> Result<Vec<Chapter>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
-            .prepare("SELECT id, project_id, idx, title, raw_content, sentence_count, ready_sentence_count, total_duration, bgm_path, bgm_volume, COALESCE(is_enabled, 1) FROM chapters WHERE project_id = ?1 ORDER BY idx ASC")
+            // sentence_count, ready_sentence_count, total_duration tính realtime từ bảng sentences
+            // (các cột lưu sẵn trong chapters không được cập nhật khi sinh audio nên dễ bị lệch)
+            .prepare(
+                "SELECT id, project_id, idx, title, raw_content,
+                    (SELECT COUNT(*) FROM sentences s WHERE s.chapter_id = chapters.id) AS sentence_count,
+                    (SELECT COUNT(*) FROM sentences s WHERE s.chapter_id = chapters.id AND s.status = 'ready') AS ready_sentence_count,
+                    (SELECT COALESCE(SUM(s.duration), 0.0) FROM sentences s WHERE s.chapter_id = chapters.id) AS total_duration,
+                    bgm_path, bgm_volume, COALESCE(is_enabled, 1)
+                 FROM chapters WHERE project_id = ?1 ORDER BY idx ASC",
+            )
             .map_err(|e| e.to_string())?;
 
         let rows = stmt
@@ -621,6 +647,71 @@ impl Database {
         Ok(list)
     }
 
+    pub fn get_project_role_settings(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<crate::models::ProjectRoleSettings>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let result = conn.query_row(
+            "SELECT narrator_voice, narrator_speed, narrator_temperature,
+                    dialogue_voice, dialogue_speed, dialogue_temperature, preset_id
+             FROM project_role_settings WHERE project_id = ?1",
+            params![project_id],
+            |row| {
+                Ok(crate::models::ProjectRoleSettings {
+                    narrator: crate::models::RoleVoiceSetting {
+                        voice: row.get(0)?,
+                        speed: row.get(1)?,
+                        temperature: row.get(2)?,
+                    },
+                    dialogue: crate::models::RoleVoiceSetting {
+                        voice: row.get(3)?,
+                        speed: row.get(4)?,
+                        temperature: row.get(5)?,
+                    },
+                    preset_id: row.get(6)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(settings) => Ok(Some(settings)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    pub fn save_project_role_settings(
+        &self,
+        project_id: &str,
+        settings: &crate::models::ProjectRoleSettings,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+        conn.execute(
+            "INSERT OR REPLACE INTO project_role_settings (
+                project_id, narrator_voice, narrator_speed, narrator_temperature,
+                dialogue_voice, dialogue_speed, dialogue_temperature, preset_id, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+            params![
+                project_id,
+                settings.narrator.voice,
+                settings.narrator.speed,
+                settings.narrator.temperature,
+                settings.dialogue.voice,
+                settings.dialogue.speed,
+                settings.dialogue.temperature,
+                settings.preset_id,
+                now
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn delete_preset(&self, preset_id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM casting_presets WHERE id = ?1;", params![preset_id])
@@ -679,7 +770,7 @@ impl Database {
                 "UPDATE sentences SET speaker = '', voice = ?1, speed = ?2, temperature = ?3 
                  WHERE chapter_id IN (SELECT id FROM chapters WHERE project_id = ?4) 
                    AND is_dialogue = 0 
-                   AND NOT (clean_text LIKE '[Khoảng lặng%');",
+                   AND NOT (clean_text LIKE '[Khoảng lặng%' OR clean_text LIKE '[Hiệu ứng:%' OR clean_text LIKE '[Nhạc nền:%');",
                 params![voice, speed, temperature, pid],
             )
             .map_err(|e| e.to_string())?;
@@ -688,7 +779,7 @@ impl Database {
                 "UPDATE sentences SET speaker = '', voice = ?1, speed = ?2, temperature = ?3 
                  WHERE chapter_id = ?4 
                    AND is_dialogue = 0 
-                   AND NOT (clean_text LIKE '[Khoảng lặng%');",
+                   AND NOT (clean_text LIKE '[Khoảng lặng%' OR clean_text LIKE '[Hiệu ứng:%' OR clean_text LIKE '[Nhạc nền:%');",
                 params![voice, speed, temperature, chapter_id],
             )
             .map_err(|e| e.to_string())?;
@@ -753,7 +844,7 @@ impl Database {
             "narration_only" => {
                 conn.execute(
                     "UPDATE sentences SET speaker = ?1, voice = ?2, speed = ?3, temperature = ?4 
-                     WHERE chapter_id = ?5 AND idx >= ?6 AND idx <= ?7 AND is_dialogue = 0 AND NOT (clean_text LIKE '[Khoảng lặng%');",
+                     WHERE chapter_id = ?5 AND idx >= ?6 AND idx <= ?7 AND is_dialogue = 0 AND NOT (clean_text LIKE '[Khoảng lặng%' OR clean_text LIKE '[Hiệu ứng:%' OR clean_text LIKE '[Nhạc nền:%');",
                     params![speaker, voice, speed, temperature, chapter_id, min_idx, max_idx],
                 )
                 .map_err(|e| e.to_string())?;
@@ -761,7 +852,7 @@ impl Database {
             _ => {
                 conn.execute(
                     "UPDATE sentences SET speaker = ?1, voice = ?2, speed = ?3, temperature = ?4 
-                     WHERE chapter_id = ?5 AND idx >= ?6 AND idx <= ?7 AND NOT (clean_text LIKE '[Khoảng lặng%');",
+                     WHERE chapter_id = ?5 AND idx >= ?6 AND idx <= ?7 AND NOT (clean_text LIKE '[Khoảng lặng%' OR clean_text LIKE '[Hiệu ứng:%' OR clean_text LIKE '[Nhạc nền:%');",
                     params![speaker, voice, speed, temperature, chapter_id, min_idx, max_idx],
                 )
                 .map_err(|e| e.to_string())?;
@@ -1511,6 +1602,48 @@ impl Database {
         duration_secs: f64,
         audio_file_path: &str,
     ) -> Result<Sentence, String> {
+        let marker_text = format!("[Hiệu ứng: {} ({:.1}s)]", sfx_name, duration_secs);
+        self.insert_marker_sentence(
+            chapter_id,
+            target_sentence_id,
+            position,
+            &marker_text,
+            duration_secs,
+            audio_file_path,
+        )
+    }
+
+    /// Chèn dòng nhạc nền (BGM chèn): audio riêng, BGM tổng bị tắt tiếng trong lúc dòng này chạy khi ghép
+    pub fn insert_bgm_sentence(
+        &self,
+        chapter_id: &str,
+        target_sentence_id: &str,
+        position: &str,
+        bgm_name: &str,
+        duration_secs: f64,
+        audio_file_path: &str,
+    ) -> Result<Sentence, String> {
+        let marker_text = format!("[Nhạc nền: {} ({:.1}s)]", bgm_name, duration_secs);
+        self.insert_marker_sentence(
+            chapter_id,
+            target_sentence_id,
+            position,
+            &marker_text,
+            duration_secs,
+            audio_file_path,
+        )
+    }
+
+    /// Chèn một dòng có audio riêng (hiệu ứng / nhạc nền) vào trước hoặc sau câu đích
+    fn insert_marker_sentence(
+        &self,
+        chapter_id: &str,
+        target_sentence_id: &str,
+        position: &str,
+        marker_text: &str,
+        duration_secs: f64,
+        audio_file_path: &str,
+    ) -> Result<Sentence, String> {
         let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
@@ -1536,9 +1669,9 @@ impl Database {
         )
         .map_err(|e| format!("Lỗi cập nhật chỉ mục câu: {}", e))?;
 
-        // 3. Tạo câu hiệu ứng SFX mới
+        // 3. Tạo dòng hiệu ứng / nhạc nền mới
         let new_id = uuid::Uuid::new_v4().to_string();
-        let display_text = format!("[Hiệu ứng: {} ({:.1}s)]", sfx_name, duration_secs);
+        let display_text = marker_text.to_string();
 
         tx.execute(
             "INSERT INTO sentences (

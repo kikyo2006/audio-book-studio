@@ -99,6 +99,14 @@ pub struct RoleVoiceSetting {
     pub temperature: f32,
 }
 
+/// Thiết lập vai hệ thống (Dẫn truyện / Hội thoại chung) lưu theo từng dự án
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectRoleSettings {
+    pub narrator: RoleVoiceSetting,
+    pub dialogue: RoleVoiceSetting,
+    pub preset_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PresetCharacter {
     pub id: String,

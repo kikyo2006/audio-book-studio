@@ -4,7 +4,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::db::Database;
 use crate::models::{Chapter, MergeChaptersResult, Project, Sentence};
-use crate::services::audio::{generate_silence_wav, trim_and_export_sfx_wav};
+use crate::services::audio::{generate_silence_wav, trim_and_export_bgm_wav, trim_and_export_sfx_wav};
 use crate::services::tts::get_sentence_audio_cache_path;
 
 #[tauri::command]
@@ -131,6 +131,29 @@ pub async fn save_casting_preset(
 ) -> Result<(), String> {
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || db.insert_or_update_preset(&preset))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_project_role_settings(
+    project_id: String,
+    db: State<'_, Arc<Database>>,
+) -> Result<Option<crate::models::ProjectRoleSettings>, String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.get_project_role_settings(&project_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn save_project_role_settings(
+    project_id: String,
+    settings: crate::models::ProjectRoleSettings,
+    db: State<'_, Arc<Database>>,
+) -> Result<(), String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.save_project_role_settings(&project_id, &settings))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -463,6 +486,65 @@ pub async fn insert_sfx_sentence(
             &target_sentence_id,
             &position,
             &sfx_name,
+            actual_duration,
+            &audio_str,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Chèn dòng "Nhạc nền" từ file nhạc trên máy: cắt đoạn, lặp cho đủ độ dài, fade, volume,
+/// lưu WAV 48kHz rồi chèn vào danh sách câu. BGM tổng của chương sẽ tắt tiếng trong lúc dòng này chạy khi xuất.
+#[tauri::command]
+pub async fn insert_bgm_sentence(
+    project_id: String,
+    chapter_id: String,
+    target_sentence_id: String,
+    position: String,
+    bgm_path: String,
+    bgm_name: String,
+    start_secs: f64,
+    cut_secs: f64,
+    target_secs: f64,
+    fade_in_secs: f64,
+    fade_out_secs: f64,
+    volume: f32,
+    app_handle: AppHandle,
+    db: State<'_, Arc<Database>>,
+) -> Result<Sentence, String> {
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("./data"));
+
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let source = PathBuf::from(&bgm_path);
+        if !source.exists() {
+            return Err(format!("Không tìm thấy file nhạc nền: {}", bgm_path));
+        }
+
+        let temp_id = uuid::Uuid::new_v4().to_string();
+        let audio_path = get_sentence_audio_cache_path(&app_dir, &project_id, &temp_id);
+
+        let actual_duration = trim_and_export_bgm_wav(
+            &source,
+            &audio_path,
+            start_secs,
+            cut_secs,
+            target_secs,
+            fade_in_secs,
+            fade_out_secs,
+            volume,
+        )?;
+        let audio_str = audio_path.to_string_lossy().to_string();
+
+        db.insert_bgm_sentence(
+            &chapter_id,
+            &target_sentence_id,
+            &position,
+            &bgm_name,
             actual_duration,
             &audio_str,
         )

@@ -35,10 +35,13 @@ import {
   tauriDeleteCastingPreset,
   tauriDeleteCharacter,
   tauriGetCastingPresets,
+  tauriGetProjectRoleSettings,
   tauriGetSentences,
   tauriSaveCastingPreset,
+  tauriSaveProjectRoleSettings,
   tauriSaveCharacter,
 } from "@/lib/tauri";
+import { isNonSpeechSentenceText } from "@/lib/utils";
 import type { CastingPreset, CharacterProfile, SentenceItem } from "@/types";
 
 interface CharacterModalProps {
@@ -74,19 +77,25 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
   const {
     selectedVoice: defaultGlobalVoice,
     dialogueVoice: defaultGlobalDialogueVoice,
+    narratorSpeed: savedNarratorSpeed,
+    narratorTemperature: savedNarratorTemp,
+    dialogueSpeed: savedDialogueSpeed,
+    dialogueTemperature: savedDialogueTemp,
+    castingPresetId: savedPresetId,
     setSelectedVoice,
     setDialogueVoice: setGlobalDialogueVoice,
+    setRoleSettings,
   } = useStudioSettingsStore();
 
-  // Narrator (Dẫn Truyện) Role settings
+  // Narrator (Dẫn Truyện) Role settings (khởi tạo từ store đã lưu, không về 1.0 / 0.45 mỗi lần mở)
   const [narratorVoice, setNarratorVoice] = useState(defaultGlobalVoice || "Thảo Nhi");
-  const [narratorSpeed, setNarratorSpeed] = useState(1.0);
-  const [narratorTemp, setNarratorTemp] = useState(0.45);
+  const [narratorSpeed, setNarratorSpeed] = useState(savedNarratorSpeed);
+  const [narratorTemp, setNarratorTemp] = useState(savedNarratorTemp);
 
   // Dialogue (Hội Thoại Chung) Role settings
   const [dialogueVoice, setDialogueVoice] = useState(defaultGlobalDialogueVoice || "Thảo Nhi");
-  const [dialogueSpeed, setDialogueSpeed] = useState(1.0);
-  const [dialogueTemp, setDialogueTemp] = useState(0.45);
+  const [dialogueSpeed, setDialogueSpeed] = useState(savedDialogueSpeed);
+  const [dialogueTemp, setDialogueTemp] = useState(savedDialogueTemp);
 
   // Custom Character creation form
   const [name, setName] = useState("");
@@ -108,13 +117,65 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
 
   // Casting Presets state
   const [presets, setPresets] = useState<CastingPreset[]>([]);
-  const [selectedPresetId, setSelectedPresetId] = useState<string>("");
+  const [selectedPresetId, setSelectedPresetId] = useState<string>(savedPresetId);
   const [isPromptNewPreset, setIsPromptNewPreset] = useState(false);
   const [newPresetName, setNewPresetName] = useState("");
   const [isRenamingPreset, setIsRenamingPreset] = useState(false);
   const [renameValue, setRenameValue] = useState("");
 
   const { askConfirm } = useConfirmStore();
+
+  // Lưu tốc độ / nhiệt độ / preset đang chọn vào store (persist) mỗi khi thay đổi
+  useEffect(() => {
+    setRoleSettings({
+      narratorSpeed,
+      narratorTemperature: narratorTemp,
+      dialogueSpeed,
+      dialogueTemperature: dialogueTemp,
+      castingPresetId: selectedPresetId,
+    });
+  }, [narratorSpeed, narratorTemp, dialogueSpeed, dialogueTemp, selectedPresetId, setRoleSettings]);
+
+  // Lưu thiết lập vai hiện tại (Dẫn truyện / Hội thoại / preset) vào DB theo dự án
+  const saveRoleSettings = async () => {
+    if (!activeProject) return;
+    try {
+      await tauriSaveProjectRoleSettings(activeProject.id, {
+        narrator: { voice: narratorVoice, speed: narratorSpeed, temperature: narratorTemp },
+        dialogue: { voice: dialogueVoice, speed: dialogueSpeed, temperature: dialogueTemp },
+        preset_id: selectedPresetId || null,
+      });
+    } catch (err) {
+      console.error("Lỗi lưu thiết lập vai vào DB:", err);
+    }
+  };
+
+  // Mở modal: nạp thiết lập vai đã lưu trong DB của dự án (ưu tiên hơn giá trị suy ra từ các câu)
+  useEffect(() => {
+    if (!isOpen || !activeProject) return;
+    let cancelled = false;
+    const projectId = activeProject.id;
+
+    (async () => {
+      try {
+        const saved = await tauriGetProjectRoleSettings(projectId);
+        if (cancelled || !saved) return;
+        setNarratorVoice(saved.narrator.voice);
+        setNarratorSpeed(saved.narrator.speed);
+        setNarratorTemp(saved.narrator.temperature);
+        setDialogueVoice(saved.dialogue.voice);
+        setDialogueSpeed(saved.dialogue.speed);
+        setDialogueTemp(saved.dialogue.temperature);
+        setSelectedPresetId(saved.preset_id ?? "");
+      } catch (err) {
+        console.error("Lỗi nạp thiết lập vai từ DB:", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, activeProject?.id]);
 
   // Load presets and sync voices on mount or open
   useEffect(() => {
@@ -149,6 +210,8 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
     try {
       const list = await tauriGetCastingPresets();
       setPresets(list);
+      // Preset đã lưu có thể đã bị xóa: bỏ chọn để dropdown không bị trống
+      setSelectedPresetId((prev) => (list.some((p) => p.id === prev) ? prev : ""));
     } catch (err) {
       console.error("Lỗi tải danh sách preset:", err);
     }
@@ -376,6 +439,7 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
       // Đồng bộ giọng mặc định toàn cục
       setSelectedVoice(narratorVoice);
       setGlobalDialogueVoice(dialogueVoice);
+      await saveRoleSettings();
 
       await reloadSentences();
       showNotice(`Đã áp dụng cấu hình phân vai cho Chương hiện tại!`);
@@ -443,6 +507,7 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
           // Đồng bộ giọng mặc định toàn cục
           setSelectedVoice(narratorVoice);
           setGlobalDialogueVoice(dialogueVoice);
+          await saveRoleSettings();
 
           await reloadSentences();
           showNotice(`Đã áp dụng thành công Bộ Phân Vai cho TOÀN BỘ cuốn sách!`);
@@ -490,6 +555,7 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
         // 4. Đồng bộ persisted store
         setSelectedVoice(narratorVoice);
         setGlobalDialogueVoice(dialogueVoice);
+        await saveRoleSettings();
 
         // 5. Cập nhật danh sách câu mới nhất
         await reloadSentences();
@@ -538,7 +604,7 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
 
   // Statistics
   const narrationSentences = sentences.filter(
-    (s) => !s.is_dialogue && !s.clean_text.startsWith("[Khoảng lặng")
+    (s) => !s.is_dialogue && !isNonSpeechSentenceText(s.clean_text)
   );
   const dialogueSentences = sentences.filter((s) => s.is_dialogue);
   const selectedSentence = sentences.find((s) => s.id === selectedSentenceId);
@@ -571,6 +637,7 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
         applyAllChapters: false,
       });
       setSelectedVoice(narratorVoice);
+      await saveRoleSettings();
       await reloadSentences();
       showNotice(
         `Đã gán giọng "${narratorVoice}" cho toàn bộ ${narrationSentences.length} câu Dẫn Truyện trong chương!`
@@ -597,6 +664,7 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
         projectId: activeProject.id,
       });
       setSelectedVoice(narratorVoice);
+      await saveRoleSettings();
       await reloadSentences();
       showNotice(
         `Đã áp dụng giọng "${narratorVoice}" cho toàn bộ câu Dẫn Truyện của TẤT CẢ các chương trong tác phẩm!`
@@ -623,6 +691,7 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
         onlyUnassigned,
       });
       setGlobalDialogueVoice(dialogueVoice);
+      await saveRoleSettings();
       await reloadSentences();
       showNotice(
         onlyUnassigned

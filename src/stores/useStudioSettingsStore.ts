@@ -53,6 +53,13 @@ interface StudioSettingsState {
   sentencePauseMs: number;
   paragraphPauseMs: number;
 
+  // Thiết lập vai hệ thống trong CharacterModal (lưu lại để không bị reset về mặc định)
+  narratorSpeed: number;
+  narratorTemperature: number;
+  dialogueSpeed: number;
+  dialogueTemperature: number;
+  castingPresetId: string;
+
   setServerUrl: (url: string) => void;
   setSelectedVoice: (voice: string) => void;
   setDialogueVoice: (voice: string) => void;
@@ -63,6 +70,18 @@ interface StudioSettingsState {
   setWaveformZoom: (zoom: number) => void;
   setSentencePauseMs: (ms: number) => void;
   setParagraphPauseMs: (ms: number) => void;
+  setRoleSettings: (
+    settings: Partial<
+      Pick<
+        StudioSettingsState,
+        | "narratorSpeed"
+        | "narratorTemperature"
+        | "dialogueSpeed"
+        | "dialogueTemperature"
+        | "castingPresetId"
+      >
+    >
+  ) => void;
 }
 
 export const useStudioSettingsStore = create<StudioSettingsState>()(
@@ -78,6 +97,11 @@ export const useStudioSettingsStore = create<StudioSettingsState>()(
       waveformZoom: 35,
       sentencePauseMs: 350,
       paragraphPauseMs: 750,
+      narratorSpeed: 1.0,
+      narratorTemperature: 0.45,
+      dialogueSpeed: 1.0,
+      dialogueTemperature: 0.45,
+      castingPresetId: "",
 
       setServerUrl: (url) => set({ serverUrl: url }),
       setSelectedVoice: (voice) => set({ selectedVoice: voice }),
@@ -89,6 +113,7 @@ export const useStudioSettingsStore = create<StudioSettingsState>()(
       setWaveformZoom: (waveformZoom) => set({ waveformZoom }),
       setSentencePauseMs: (sentencePauseMs) => set({ sentencePauseMs }),
       setParagraphPauseMs: (paragraphPauseMs) => set({ paragraphPauseMs }),
+      setRoleSettings: (settings) => set(settings),
     }),
     {
       name: "bookstudio-settings-store",
@@ -107,6 +132,11 @@ export const useStudioSettingsStore = create<StudioSettingsState>()(
         waveformZoom: state.waveformZoom,
         sentencePauseMs: state.sentencePauseMs,
         paragraphPauseMs: state.paragraphPauseMs,
+        narratorSpeed: state.narratorSpeed,
+        narratorTemperature: state.narratorTemperature,
+        dialogueSpeed: state.dialogueSpeed,
+        dialogueTemperature: state.dialogueTemperature,
+        castingPresetId: state.castingPresetId,
       }),
     }
   )

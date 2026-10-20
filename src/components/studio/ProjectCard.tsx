@@ -46,14 +46,20 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
     }
   };
 
-  const progressPercent =
-    project.total_sentences > 0
-      ? Math.round(
-          (project.completed_sentences / project.total_sentences) * 100
-        )
-      : 0;
+  const isCompleted =
+    project.total_sentences > 0 &&
+    project.completed_sentences >= project.total_sentences;
 
-  const isCompleted = progressPercent === 100 && project.total_sentences > 0;
+  // Tiến độ làm tròn 1 chữ số thập phân. Đã có câu xong thì tối thiểu 0.1%, chưa xong hết thì tối đa 99.9%
+  const progressPercent = (() => {
+    if (project.total_sentences <= 0 || project.completed_sentences <= 0) return 0;
+    if (isCompleted) return 100;
+    const raw = (project.completed_sentences / project.total_sentences) * 100;
+    return Math.min(99.9, Math.max(0.1, Math.round(raw * 10) / 10));
+  })();
+  const progressLabel = Number.isInteger(progressPercent)
+    ? String(progressPercent)
+    : progressPercent.toFixed(1);
 
   const handleCoverUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -145,7 +151,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
           ) : progressPercent > 0 ? (
             <span className="inline-flex items-center gap-1 text-[9px] font-semibold bg-indigo-950/90 text-indigo-300 border border-indigo-500/40 px-2 py-0.5 rounded-full shadow-md backdrop-blur-sm">
               <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-              <span>{progressPercent}% đã đọc</span>
+              <span>{progressLabel}% đã đọc</span>
             </span>
           ) : (
             <span className="inline-flex items-center text-[9px] font-medium bg-zinc-900/90 text-zinc-400 border border-zinc-700/60 px-2 py-0.5 rounded-full shadow-md backdrop-blur-sm">
@@ -224,7 +230,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
                   : "text-zinc-500"
               }`}
             >
-              {progressPercent}%
+              {progressLabel}%
             </span>
           </div>
           <div className="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">

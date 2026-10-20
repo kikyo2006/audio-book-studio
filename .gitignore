@@ -48,5 +48,4 @@ next-env.d.ts
 audio_cache/
 
 !AGENTS.md
-
-
+*.bk*

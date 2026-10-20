@@ -15,6 +15,7 @@ import {
   FilePlus,
   Plus,
   Sparkles,
+  Music,
 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useProjectStore } from "@/stores/useProjectStore";
@@ -34,7 +35,12 @@ import {
   tauriUpdateSentenceText,
   tauriUpdateSilenceDuration,
 } from "@/lib/tauri";
-import { formatDuration, MAX_SENTENCE_CHARS } from "@/lib/utils";
+import {
+  formatDuration,
+  isBgmSentenceText,
+  isNonSpeechSentenceText,
+  MAX_SENTENCE_CHARS,
+} from "@/lib/utils";
 import type { CharacterProfile, SentenceItem } from "@/types";
 import {
   SentenceContextMenu,
@@ -42,6 +48,7 @@ import {
 } from "./SentenceContextMenu";
 import { MoveSentenceModal } from "./MoveSentenceModal";
 import { InsertSfxModal } from "./InsertSfxModal";
+import { InsertBgmModal } from "./InsertBgmModal";
 import type { SfxItem } from "@/data/sfxCatalog";
 
 interface SentenceRowProps {
@@ -120,6 +127,7 @@ const SentenceRow = memo(function SentenceRow({
 }: SentenceRowProps) {
   const isSilence = Boolean(item.clean_text?.startsWith("[Khoảng lặng"));
   const isSfx = Boolean(item.clean_text?.startsWith("[Hiệu ứng:"));
+  const isBgm = isBgmSentenceText(item.clean_text);
   const isTooLong = editText.trim().length > MAX_SENTENCE_CHARS;
   const [durationInput, setDurationInput] = useState<string>(
     item.duration ? String(item.duration) : "3.0"
@@ -151,6 +159,12 @@ const SentenceRow = memo(function SentenceRow({
             : isSelected
             ? "bg-indigo-950/30 border-indigo-500/60 border-dashed"
             : "bg-zinc-950/40 hover:bg-zinc-900/60 border-zinc-800 border-dashed"
+          : isBgm
+          ? isPlayingThis
+            ? "bg-emerald-950/60 border-emerald-400 shadow-md shadow-emerald-500/20 ring-1 ring-emerald-400/50"
+            : isSelected
+            ? "bg-emerald-950/40 border-emerald-500/60"
+            : "bg-emerald-950/15 hover:bg-emerald-950/30 border-emerald-500/30"
           : isSfx
           ? isPlayingThis
             ? "bg-purple-950/60 border-purple-400 shadow-md shadow-purple-500/20 ring-1 ring-purple-400/50"
@@ -203,6 +217,19 @@ const SentenceRow = memo(function SentenceRow({
                   giây (s)
                 </span>
               </div>
+            </div>
+          ) : isBgm ? (
+            <div
+              className="flex items-center gap-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                <Music className="w-3 h-3 text-emerald-400" />
+                Nhạc nền (BGM)
+              </span>
+              <span className="text-[10px] font-mono text-emerald-400 bg-zinc-950 border border-emerald-500/20 px-1.5 py-0.5 rounded">
+                {item.duration ? `${item.duration.toFixed(1)}s` : "0.0s"}
+              </span>
             </div>
           ) : isSfx ? (
             <div
@@ -317,7 +344,7 @@ const SentenceRow = memo(function SentenceRow({
             </span>
           )}
 
-          {item.status === "pending" && !isSilence && !isSfx && (
+          {item.status === "pending" && !isSilence && !isSfx && !isBgm && (
             <span className="text-[11px] text-zinc-500">Chưa tạo</span>
           )}
 
@@ -332,6 +359,8 @@ const SentenceRow = memo(function SentenceRow({
             title={
               isSilence
                 ? `Nghe thử khoảng lặng (${item.duration}s)`
+                : isBgm
+                ? `Nghe thử nhạc nền (${item.duration?.toFixed(1)}s)`
                 : isSfx
                 ? `Nghe thử hiệu ứng âm thanh (${item.duration?.toFixed(1)}s)`
                 : item.status === "ready"
@@ -347,7 +376,7 @@ const SentenceRow = memo(function SentenceRow({
           </button>
 
           {/* Regenerate Button */}
-          {!isSilence && !isSfx && (
+          {!isSilence && !isSfx && !isBgm && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -375,6 +404,25 @@ const SentenceRow = memo(function SentenceRow({
             Sóng âm im lặng tuyệt đối {item.duration || 3.0} giây
           </span>
           <div className="flex-1 border-t border-dashed border-zinc-800" />
+        </div>
+      ) : isBgm ? (
+        <div
+          className="flex items-center gap-2.5 py-2 px-3 rounded-lg bg-emerald-950/20 border border-emerald-500/30 text-emerald-200 text-xs select-none"
+          title="Nhấp chuột phải vào đây để chèn thêm hoặc xóa nhạc nền"
+        >
+          <div className="w-6 h-6 rounded bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+            <Music className="w-3.5 h-3.5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="font-medium text-emerald-100 truncate text-[13px]">
+              {item.clean_text.replace(/^\[Nhạc nền:\s*/, "").replace(/\s*\([\d.]+s\)]$/, "")}
+            </div>
+            <div className="text-[11px] text-emerald-400/80 font-mono flex items-center gap-2">
+              <span>Thời lượng phát: {item.duration ? `${item.duration.toFixed(2)}s` : "0.0s"}</span>
+              <span>•</span>
+              <span className="text-zinc-500">BGM tổng của chương tắt tiếng trong đoạn này</span>
+            </div>
+          </div>
         </div>
       ) : isSfx ? (
         <div
@@ -527,6 +575,15 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
     sentence: null,
     mode: "before",
   });
+  const [bgmModal, setBgmModal] = useState<{
+    isOpen: boolean;
+    sentence: SentenceItem | null;
+    position: "above" | "below";
+  }>({
+    isOpen: false,
+    sentence: null,
+    position: "below",
+  });
   const [sfxModal, setSfxModal] = useState<{
     isOpen: boolean;
     sentence: SentenceItem | null;
@@ -592,6 +649,8 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
   );
 
   const handleStartEdit = useCallback((sentence: SentenceItem) => {
+    // Khoảng lặng / hiệu ứng / nhạc nền không sửa chữ được (chữ chỉ là nhãn hiển thị)
+    if (isNonSpeechSentenceText(sentence.clean_text)) return;
     setEditingId(sentence.id);
     setEditText(sentence.clean_text);
   }, []);
@@ -622,6 +681,8 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
   const handleRegenerate = useCallback(
     async (sentence: SentenceItem) => {
       if (!activeProject) return;
+      // Khoảng lặng / hiệu ứng không đọc bằng TTS (tránh đọc thành tiếng "Khoảng lặng 45 giây")
+      if (isNonSpeechSentenceText(sentence.clean_text)) return;
 
       // Nếu đang báo offline, thử ping nhanh xem server đã dậy chưa
       let online = isServerOnline;
@@ -694,11 +755,16 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
       setSelectedSentenceId(sentence.id);
 
       // Nếu câu đã có âm thanh sẵn sàng -> chỉ việc phát
-      if (sentence.status === "ready") {
+      // (khoảng lặng / hiệu ứng đã có file audio thì luôn phát file đó, không bao giờ gửi TTS)
+      if (
+        sentence.status === "ready" ||
+        (isNonSpeechSentenceText(sentence.clean_text) && sentence.audio_path)
+      ) {
         setPlayingSentenceId(sentence.id);
         setIsPlaying(true);
         return;
       }
+      if (isNonSpeechSentenceText(sentence.clean_text)) return;
 
       if (!activeProject) return;
 
@@ -895,11 +961,13 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
           sentenceId: sentence.id,
           durationSecs: newDuration,
         });
-        updateSentenceAudio(sentence.id, sentence.audio_path || "", newDuration);
+        // updateSentenceText đặt status = "pending" nên phải gọi trước updateSentenceAudio (đặt lại "ready"),
+        // nếu không câu khoảng lặng bị coi là chưa tạo và bị gửi cho TTS đọc
         updateSentenceText(
           sentence.id,
           `[Khoảng lặng ${newDuration.toFixed(1)}s]`
         );
+        updateSentenceAudio(sentence.id, sentence.audio_path || "", newDuration);
 
         const updatedChapters = await tauriGetChapters(activeProject.id);
         setChapters(updatedChapters);
@@ -963,6 +1031,13 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
     []
   );
 
+  const handleInsertBgm = useCallback(
+    (sentence: SentenceItem, position: "above" | "below" = "below") => {
+      setBgmModal({ isOpen: true, sentence, position });
+    },
+    []
+  );
+
   const { askConfirm } = useConfirmStore();
 
   const handleDeleteSentence = useCallback(
@@ -970,17 +1045,28 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
       if (!activeChapter || !activeProject) return;
       const isSilence = Boolean(sentence.clean_text?.startsWith("[Khoảng lặng"));
       const isSfx = Boolean(sentence.clean_text?.startsWith("[Hiệu ứng:"));
+      const isBgm = isBgmSentenceText(sentence.clean_text);
       const title = isSilence
         ? "Xác Nhận Xóa Khoảng Lặng"
         : isSfx
         ? "Xác Nhận Xóa Hiệu Ứng"
+        : isBgm
+        ? "Xác Nhận Xóa Nhạc Nền"
         : "Xác Nhận Xóa Câu";
       const desc = isSilence
         ? "Bạn có chắc chắn muốn xóa khoảng lặng này khỏi kịch bản?"
         : isSfx
         ? `Bạn có chắc muốn xóa hiệu ứng: "${sentence.clean_text}" khỏi kịch bản?`
+        : isBgm
+        ? `Bạn có chắc muốn xóa nhạc nền: "${sentence.clean_text}" khỏi kịch bản?`
         : `Bạn có chắc muốn xóa câu thoại: "${(sentence.clean_text || sentence.raw_text || "").slice(0, 60)}..."?`;
-      const confirmText = isSfx ? "Xóa Hiệu Ứng" : isSilence ? "Xóa Khoảng Lặng" : "Xóa Câu";
+      const confirmText = isSfx
+        ? "Xóa Hiệu Ứng"
+        : isBgm
+        ? "Xóa Nhạc Nền"
+        : isSilence
+        ? "Xóa Khoảng Lặng"
+        : "Xóa Câu";
 
       askConfirm({
         title,
@@ -1002,6 +1088,49 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
     },
     [activeChapter, activeProject, setSentences, setChapters, askConfirm]
   );
+
+  // Phím Delete: xóa câu đang chọn (giống menu chuột phải "Xóa câu này")
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" || e.defaultPrevented) return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (!selectedSentenceId || editingId) return;
+      if (contextMenu || moveModal.isOpen || sfxModal.isOpen || bgmModal.isOpen) return;
+      if (useConfirmStore.getState().isOpen) return;
+
+      // Không bắt phím khi đang gõ ở ô nhập liệu
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      // Chỉ nhận khi focus đang ở nền trang hoặc trong bảng câu (tránh xóa nhầm khi đang ở dialog khác)
+      if (target && target !== document.body && !parentRef.current?.contains(target)) {
+        return;
+      }
+
+      const sentence = sentences.find((s) => s.id === selectedSentenceId);
+      if (!sentence) return;
+      e.preventDefault();
+      handleDeleteSentence(sentence);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    selectedSentenceId,
+    editingId,
+    contextMenu,
+    moveModal.isOpen,
+    sfxModal.isOpen,
+    bgmModal.isOpen,
+    sentences,
+    handleDeleteSentence,
+  ]);
 
   return (
     <div
@@ -1116,7 +1245,9 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
                 <div
                   key={item.id}
                   data-index={virtualRow.index}
-                  ref={rowVirtualizer.measureElement}
+                  // Ref inline (đổi identity mỗi lần render) để React gọi lại và đo lại chiều cao
+                  // ngay khi dòng bung ra/thu gọn lúc vào/thoát chế độ sửa, tránh dòng dưới bị đè
+                  ref={(el) => rowVirtualizer.measureElement(el)}
                   style={{
                     position: "absolute",
                     top: 0,
@@ -1162,6 +1293,7 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
         onClose={() => setContextMenu(null)}
         onAddSilence={handleAddSilence}
         onSelectSfx={handleSelectSfx}
+        onInsertBgm={handleInsertBgm}
         onInsertBlank={handleInsertBlank}
         onOpenInsertModal={() => {
           if (onOpenInsertModal) onOpenInsertModal();
@@ -1199,6 +1331,17 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
         targetSentence={sfxModal.sentence}
         initialSfx={sfxModal.sfxItem}
         initialPosition={sfxModal.position}
+        onInserted={(newSentence) => {
+          setSelectedSentenceId(newSentence.id);
+        }}
+      />
+
+      {/* Modal Chèn Nhạc Nền (BGM) */}
+      <InsertBgmModal
+        isOpen={bgmModal.isOpen}
+        onClose={() => setBgmModal((prev) => ({ ...prev, isOpen: false }))}
+        targetSentence={bgmModal.sentence}
+        initialPosition={bgmModal.position}
         onInserted={(newSentence) => {
           setSelectedSentenceId(newSentence.id);
         }}

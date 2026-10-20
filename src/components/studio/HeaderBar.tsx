@@ -24,11 +24,12 @@ import {
   BookCheck,
 } from "lucide-react";
 import { AppMenuBar } from "./AppMenuBar";
+import { useTtsHealth } from "@/hooks/useTtsHealth";
+import { isNonSpeechSentenceText } from "@/lib/utils";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useStudioSettingsStore } from "@/stores/useStudioSettingsStore";
 import { useConfirmStore } from "@/stores/useConfirmStore";
 import {
-  tauriCheckTtsConnection,
   tauriDeleteProject,
   tauriSynthesizeSentence,
   tauriUpdateProjectStatus,
@@ -146,23 +147,10 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
     speed,
     temperature,
     isServerOnline,
-    setIsServerOnline,
   } = useStudioSettingsStore();
 
-  const [isCheckingTts, setIsCheckingTts] = useState(false);
-
-  const checkHealth = async () => {
-    setIsCheckingTts(true);
-    const online = await tauriCheckTtsConnection(serverUrl);
-    setIsServerOnline(online);
-    setIsCheckingTts(false);
-  };
-
-  useEffect(() => {
-    checkHealth();
-    const interval = setInterval(checkHealth, 15000);
-    return () => clearInterval(interval);
-  }, [serverUrl]);
+  // page.tsx đã polling định kỳ, ở đây chỉ dùng để bấm kiểm tra tay
+  const { isCheckingTts, checkHealth } = useTtsHealth(false);
 
   const abortBatchRef = useRef(false);
 
@@ -181,9 +169,11 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
       if (!confirmRestart) return;
     }
 
+    // Bỏ qua khoảng lặng / hiệu ứng: audio của chúng được tạo riêng, không đọc bằng TTS
+    const speechSentences = sentences.filter((s) => !isNonSpeechSentenceText(s.clean_text));
     const targetSentences = forceAll
-      ? sentences
-      : sentences.filter((s) => s.status !== "ready");
+      ? speechSentences
+      : speechSentences.filter((s) => s.status !== "ready");
 
     if (targetSentences.length === 0) return;
 
