@@ -17,6 +17,7 @@ import {
   tauriGetSentences,
   tauriImportProject,
   tauriParseEbook,
+  tauriSelectBookFile,
 } from "@/lib/tauri";
 import type { EbookParsedData } from "@/types";
 
@@ -34,6 +35,27 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
   const [parsedData, setParsedData] = useState<EbookParsedData | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const handleBrowseClick = async () => {
+    if (isTauriEnvironment()) {
+      const selected = await tauriSelectBookFile();
+      if (selected) {
+        setFilePath(selected);
+        handleParse(selected);
+      }
+    } else {
+      fileInputRef.current?.click();
+    }
+  };
+
+  const handleWebFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setFilePath(file.name);
+      handleParse(file.name);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -112,6 +134,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
           total_sentences: 5,
           completed_sentences: 0,
           total_duration: 0,
+          status: "active",
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
@@ -162,22 +185,60 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
         {/* Body */}
         <div className="p-5 space-y-4 text-xs">
           {/* File Path input */}
-          <div className="space-y-1.5">
-            <label className="text-zinc-300 font-medium">
-              Đường dẫn tệp sách trên máy tính:
-            </label>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-zinc-300 font-medium">
+                Đường dẫn tệp sách trên máy tính:
+              </label>
+              <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                <span className="text-zinc-500">Định dạng hỗ trợ:</span>
+                <span className="px-1.5 py-0.5 rounded bg-indigo-950/70 border border-indigo-700/50 text-indigo-300 font-mono font-medium text-[10px]">
+                  .epub
+                </span>
+                <span className="px-1.5 py-0.5 rounded bg-zinc-800/90 border border-zinc-700/60 text-zinc-300 font-mono text-[10px]">
+                  .txt
+                </span>
+                <span className="px-1.5 py-0.5 rounded bg-zinc-800/90 border border-zinc-700/60 text-zinc-300 font-mono text-[10px]">
+                  .md
+                </span>
+                <span className="px-1.5 py-0.5 rounded bg-zinc-800/90 border border-zinc-700/60 text-zinc-300 font-mono text-[10px]">
+                  .markdown
+                </span>
+              </div>
+            </div>
+
+            {/* Hidden native input for web fallback */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleWebFileChange}
+              accept=".epub,.txt,.md,.markdown"
+              className="hidden"
+            />
+
             <div className="flex gap-2">
               <input
                 type="text"
                 value={filePath}
                 onChange={(e) => setFilePath(e.target.value)}
-                placeholder="Ví dụ: C:\Books\DacNhanTam.epub hoặc demo"
+                placeholder="Chọn tệp qua nút 'Chọn Tệp...' hoặc nhập đường dẫn..."
                 className="flex-1 px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200 focus:outline-none focus:border-indigo-500 font-mono text-xs"
               />
               <button
+                type="button"
+                onClick={handleBrowseClick}
+                disabled={isParsing}
+                className="px-3.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium rounded flex items-center gap-1.5 border border-zinc-700/60 transition-colors disabled:opacity-40"
+                title="Duyệt và chọn tệp sách từ máy tính (.epub, .txt, .md, .markdown)"
+              >
+                <FolderOpen className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Chọn Tệp...</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => handleParse(filePath)}
                 disabled={isParsing || !filePath.trim()}
-                className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded flex items-center gap-1.5 disabled:opacity-40"
+                className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded flex items-center gap-1.5 disabled:opacity-40 transition-colors"
               >
                 {isParsing ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />

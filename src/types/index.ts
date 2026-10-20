@@ -47,6 +47,8 @@ export interface ChapterItem {
   ready_sentence_count: number;
   total_duration: number;
   sentences?: SentenceItem[];
+  bgm_path?: string | null;
+  bgm_volume?: number | null;
 }
 
 export interface ProjectMetadata {
@@ -64,6 +66,8 @@ export interface ProjectMetadata {
   total_duration: number;
   created_at: string;
   updated_at: string;
+  /** 'active' | 'completed' | 'dropped' */
+  status: string;
 }
 
 export interface VoicePreset {
@@ -128,4 +132,31 @@ export interface CharacterProfile {
   color: string;
   is_narrator?: boolean;
 }
+
+export interface RoleVoiceSetting {
+  voice: string;
+  speed: number;
+  temperature: number;
+}
+
+export interface PresetCharacter {
+  id: string;
+  name: string;
+  voice: string;
+  speed: number;
+  temperature: number;
+  color: string;
+}
+
+export interface CastingPreset {
+  id: string;
+  name: string;
+  description?: string | null;
+  narrator: RoleVoiceSetting;
+  dialogue: RoleVoiceSetting;
+  characters: PresetCharacter[];
+  created_at: string;
+  updated_at: string;
+}
+
 

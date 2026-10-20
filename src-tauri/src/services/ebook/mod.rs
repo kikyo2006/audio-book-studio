@@ -17,11 +17,11 @@ pub fn parse_ebook_file(file_path: &str) -> Result<EbookParsedData, String> {
 
     match ext.as_str() {
         "epub" => epub_parser::parse_epub(file_path),
-        "txt" | "md" => txt_parser::parse_txt(file_path),
+        "txt" | "md" | "markdown" => txt_parser::parse_txt(file_path),
         "pdf" => {
             // Basic text extraction fallback for PDF or delegate
             Err("Định dạng PDF đang được phát triển, vui lòng sử dụng file .epub hoặc .txt".to_string())
         }
-        _ => Err(format!("Định dạng file không được hỗ trợ: .{}. Hãy dùng .epub, .txt hoặc .md", ext)),
+        _ => Err(format!("Định dạng file không được hỗ trợ: .{}. Hãy dùng .epub, .txt, .md hoặc .markdown", ext)),
     }
 }

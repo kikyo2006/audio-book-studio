@@ -1,8 +1,60 @@
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::sync::OnceLock;
+use regex::Regex;
 use zip::ZipArchive;
 use crate::models::{EbookParsedData, ParsedChapter};
+
+static BLOCK_OPEN_RE: OnceLock<Regex> = OnceLock::new();
+static BLOCK_CLOSE_RE: OnceLock<Regex> = OnceLock::new();
+static BR_RE: OnceLock<Regex> = OnceLock::new();
+static TAG_RE: OnceLock<Regex> = OnceLock::new();
+static DEC_ENTITY_RE: OnceLock<Regex> = OnceLock::new();
+static HEX_ENTITY_RE: OnceLock<Regex> = OnceLock::new();
+static CHAPTER_MARKER_RE: OnceLock<Regex> = OnceLock::new();
+
+fn get_block_open_re() -> &'static Regex {
+    BLOCK_OPEN_RE.get_or_init(|| {
+        Regex::new(r"(?i)<(p|div|section|article|header|footer|h[1-6]|li|blockquote|table|tr|caption|pre)(\s+[^>]*)?>").unwrap()
+    })
+}
+
+fn get_block_close_re() -> &'static Regex {
+    BLOCK_CLOSE_RE.get_or_init(|| {
+        Regex::new(r"(?i)</(p|div|section|article|header|footer|h[1-6]|li|blockquote|table|tr|caption|pre)>").unwrap()
+    })
+}
+
+fn get_br_re() -> &'static Regex {
+    BR_RE.get_or_init(|| {
+        Regex::new(r"(?i)<br\s*/?>").unwrap()
+    })
+}
+
+fn get_tag_re() -> &'static Regex {
+    TAG_RE.get_or_init(|| {
+        Regex::new(r"<[^>]+>").unwrap()
+    })
+}
+
+fn get_dec_entity_re() -> &'static Regex {
+    DEC_ENTITY_RE.get_or_init(|| {
+        Regex::new(r"&#([0-9]+);").unwrap()
+    })
+}
+
+fn get_hex_entity_re() -> &'static Regex {
+    HEX_ENTITY_RE.get_or_init(|| {
+        Regex::new(r"(?i)&#x([0-9a-f]+);").unwrap()
+    })
+}
+
+fn get_chapter_marker_re() -> &'static Regex {
+    CHAPTER_MARKER_RE.get_or_init(|| {
+        Regex::new(r"(?i)^(Chương\s+[0-9IVXLCDMivxlcdm]+.*|Chapter\s+[0-9IVXLCDMivxlcdm]+.*|Hồi\s+[0-9IVXLCDMivxlcdm]+.*|Phần\s+([0-9IVXLCDMivxlcdm]+|dẫn|kết|mở\s+đầu).*|Mở\s+đầu|Lời\s+mở\s+đầu|Lời\s+nói\s+đầu|Vĩ\s+thanh|Lời\s+kết)$").unwrap()
+    })
+}
 
 pub fn parse_epub(file_path: &str) -> Result<EbookParsedData, String> {
     let file = File::open(file_path).map_err(|e| format!("Không thể mở file EPUB: {}", e))?;
@@ -106,12 +158,8 @@ pub fn parse_epub(file_path: &str) -> Result<EbookParsedData, String> {
                 if html_file.read_to_string(&mut html_content).is_ok() {
                     let (chap_title, clean_text) = clean_html_to_text(&html_content, chapter_idx);
                     if !clean_text.trim().is_empty() {
-                        chapters.push(ParsedChapter {
-                            index: chapter_idx,
-                            title: chap_title,
-                            content: clean_text,
-                        });
-                        chapter_idx += 1;
+                        let sub_chapters = split_into_smart_chapters(&clean_text, &chap_title, &mut chapter_idx);
+                        chapters.extend(sub_chapters);
                     }
                 }
             }
@@ -141,7 +189,11 @@ fn extract_xml_tag(xml: &str, tag: &str) -> Option<String> {
             let content_start = &after_start[tag_end_relative + 1..];
             if let Some(end_idx) = content_start.find(&close_tag) {
                 let text = &content_start[..end_idx];
-                return Some(decode_html_entities(text.trim()));
+                let decoded = decode_html_entities(text.trim());
+                let clean_title = get_tag_re().replace_all(&decoded, "").trim().to_string();
+                if !clean_title.is_empty() {
+                    return Some(clean_title);
+                }
             }
         }
     }
@@ -149,7 +201,6 @@ fn extract_xml_tag(xml: &str, tag: &str) -> Option<String> {
 }
 
 fn find_cover_href(opf: &str) -> Option<String> {
-    // Check for <item id="cover" ... href="..."> or properties="cover-image"
     for line in opf.lines() {
         if line.contains("<item ") && (line.contains("cover") || line.contains("cover-image")) {
             if let Some(href_pos) = line.find("href=\"") {
@@ -209,45 +260,27 @@ fn resolve_path(base_dir: &str, file: &str) -> String {
     }
 }
 
-fn clean_html_to_text(html: &str, default_idx: usize) -> (String, String) {
-    // 1. Thử lấy tiêu đề từ <title>, <h1>, hoặc <h2>
+pub fn clean_html_to_text(html: &str, default_idx: usize) -> (String, String) {
+    // 1. Lấy tiêu đề từ <title>, <h1>, hoặc <h2>
     let title = extract_xml_tag(html, "title")
+        .filter(|t| !t.trim().is_empty())
         .or_else(|| extract_xml_tag(html, "h1"))
         .or_else(|| extract_xml_tag(html, "h2"))
         .unwrap_or_else(|| format!("Chương {}", default_idx));
 
-    // 2. Thay thế các tag block thành ngắt dòng
-    let mut text = html
-        .replace("<p>", "\n")
-        .replace("</p>", "\n")
-        .replace("<br>", "\n")
-        .replace("<br/>", "\n")
-        .replace("<br />", "\n")
-        .replace("<div>", "\n")
-        .replace("</div>", "\n")
-        .replace("</h1>", "\n")
-        .replace("</h2>", "\n")
-        .replace("</h3>", "\n");
+    // 2. Chuyển đổi các thẻ block HTML thành ký tự xuống dòng bằng Regex
+    let with_block_breaks = get_block_open_re().replace_all(html, "\n\n");
+    let with_block_ends = get_block_close_re().replace_all(&with_block_breaks, "\n");
+    let with_brs = get_br_re().replace_all(&with_block_ends, "\n");
 
-    // 3. Xoá mọi thẻ HTML <...>
-    let mut in_tag = false;
-    let mut clean_chars = Vec::new();
-    for ch in text.chars() {
-        if ch == '<' {
-            in_tag = true;
-        } else if ch == '>' {
-            in_tag = false;
-        } else if !in_tag {
-            clean_chars.push(ch);
-        }
-    }
-    text = clean_chars.into_iter().collect();
+    // 3. Xóa mọi thẻ HTML inline còn sót lại
+    let text_no_tags = get_tag_re().replace_all(&with_brs, "");
 
-    // 4. Giải mã các thực thể HTML
-    text = decode_html_entities(&text);
+    // 4. Giải mã toàn bộ HTML entities
+    let decoded = decode_html_entities(&text_no_tags);
 
-    // 5. Chuẩn hoá dòng trống thừa
-    let lines: Vec<&str> = text
+    // 5. Chuẩn hóa dòng trống thừa
+    let lines: Vec<&str> = decoded
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
@@ -258,19 +291,163 @@ fn clean_html_to_text(html: &str, default_idx: usize) -> (String, String) {
 }
 
 fn decode_html_entities(s: &str) -> String {
-    s.replace("&nbsp;", " ")
+    let mut text = s
+        .replace("&nbsp;", " ")
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
         .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
+        .replace("&mdash;", "—")
+        .replace("&ndash;", "–")
+        .replace("&ldquo;", "“")
+        .replace("&rdquo;", "”")
+        .replace("&lsquo;", "‘")
+        .replace("&rsquo;", "’")
+        .replace("&hellip;", "...")
         .replace("&#8212;", "—")
         .replace("&#8211;", "–")
         .replace("&#8220;", "“")
         .replace("&#8221;", "”")
         .replace("&#8216;", "‘")
         .replace("&#8217;", "’")
-        .replace("&#8230;", "...")
+        .replace("&#8230;", "...");
+
+    // Giải mã &#...; dạng số thập phân
+    text = get_dec_entity_re()
+        .replace_all(&text, |caps: &regex::Captures| {
+            if let Ok(code) = caps[1].parse::<u32>() {
+                if let Some(ch) = char::from_u32(code) {
+                    return ch.to_string();
+                }
+            }
+            caps[0].to_string()
+        })
+        .to_string();
+
+    // Giải mã &#x...; dạng số thập lục phân
+    text = get_hex_entity_re()
+        .replace_all(&text, |caps: &regex::Captures| {
+            if let Ok(code) = u32::from_str_radix(&caps[1], 16) {
+                if let Some(ch) = char::from_u32(code) {
+                    return ch.to_string();
+                }
+            }
+            caps[0].to_string()
+        })
+        .to_string();
+
+    text
+}
+
+/// Tự động tách một khối văn bản lớn thành nhiều chương nếu phát hiện các marker chương (Chương X, Chapter X...)
+fn split_into_smart_chapters(
+    raw_content: &str,
+    fallback_title: &str,
+    chapter_idx_counter: &mut usize,
+) -> Vec<ParsedChapter> {
+    let lines: Vec<&str> = raw_content.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    if lines.is_empty() {
+        return Vec::new();
+    }
+
+    let marker_re = get_chapter_marker_re();
+
+    // Tìm tất cả các dòng là tiêu đề chương
+    let mut markers: Vec<usize> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if marker_re.is_match(line) {
+            markers.push(i);
+        }
+    }
+
+    // Nếu không có marker hoặc chỉ có 1 marker ở ngay đầu -> giữ nguyên là 1 chương
+    if markers.len() < 2 {
+        let title = if fallback_title.trim().is_empty() {
+            format!("Chương {}", *chapter_idx_counter)
+        } else {
+            fallback_title.to_string()
+        };
+        let chap = ParsedChapter {
+            index: *chapter_idx_counter,
+            title,
+            content: raw_content.to_string(),
+        };
+        *chapter_idx_counter += 1;
+        return vec![chap];
+    }
+
+    let mut result = Vec::new();
+
+    // 1. Xử lý đoạn văn bản trước marker đầu tiên (nếu có, ví dụ Lời tựa, Giới thiệu)
+    if markers[0] > 0 {
+        let intro_content = lines[0..markers[0]].join("\n\n");
+        if !intro_content.trim().is_empty() {
+            let intro_title = if fallback_title.to_lowercase().contains("cover") {
+                "Giới thiệu".to_string()
+            } else if fallback_title.trim().is_empty() {
+                "Phần mở đầu".to_string()
+            } else {
+                fallback_title.to_string()
+            };
+
+            result.push(ParsedChapter {
+                index: *chapter_idx_counter,
+                title: intro_title,
+                content: intro_content,
+            });
+            *chapter_idx_counter += 1;
+        }
+    }
+
+    // 2. Tách từng chương theo các marker
+    for i in 0..markers.len() {
+        let start_line = markers[i];
+        let end_line = if i + 1 < markers.len() {
+            markers[i + 1]
+        } else {
+            lines.len()
+        };
+
+        let raw_marker = lines[start_line];
+        let mut chapter_title = raw_marker.to_string();
+        let content_start;
+
+        // Nếu dòng kế tiếp là phụ đề chương ngắn (ví dụ: Chương 1 \n Cưỡng hiếp cả thành phố)
+        if start_line + 1 < end_line {
+            let next_line = lines[start_line + 1];
+            if !marker_re.is_match(next_line) && next_line.chars().count() <= 60 && !next_line.ends_with('.') {
+                chapter_title = format!("{} - {}", raw_marker, next_line);
+                content_start = start_line + 2;
+            } else {
+                content_start = start_line + 1;
+            }
+        } else {
+            content_start = start_line + 1;
+        }
+
+        let chapter_content = lines[content_start..end_line].join("\n\n");
+        if !chapter_content.trim().is_empty() {
+            result.push(ParsedChapter {
+                index: *chapter_idx_counter,
+                title: chapter_title,
+                content: chapter_content,
+            });
+            *chapter_idx_counter += 1;
+        }
+    }
+
+    if result.is_empty() {
+        let chap = ParsedChapter {
+            index: *chapter_idx_counter,
+            title: fallback_title.to_string(),
+            content: raw_content.to_string(),
+        };
+        *chapter_idx_counter += 1;
+        vec![chap]
+    } else {
+        result
+    }
 }
 
 fn base64_encode(data: &[u8]) -> String {
@@ -302,4 +479,37 @@ fn base64_encode(data: &[u8]) -> String {
         i += 3;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::tokenizer::tokenize_chapter;
+
+    #[test]
+    fn test_parse_de_thi_dam_mau() {
+        let epub_path = r"C:\Users\yudev\Downloads\Đề thi đẫm máu.epub";
+        if !std::path::Path::new(epub_path).exists() {
+            return;
+        }
+        let parsed = parse_epub(epub_path).expect("Parse thất bại");
+        println!("Title: {}", parsed.title);
+        println!("Chapters count: {}", parsed.chapters.len());
+        for c in parsed.chapters.iter().take(5) {
+            println!("  [Chapter {}] {}", c.index, c.title);
+            println!("    Length: {} chars", c.content.len());
+            let first_line = c.content.lines().next().unwrap_or("");
+            println!("    Preview: {}", &first_line[..first_line.len().min(80)]);
+        }
+
+        // Kiểm tra riêng Chapter 3 (Phần dẫn - Quái vật)
+        let chap3 = &parsed.chapters[2];
+        let sentences = tokenize_chapter("c3", &chap3.content);
+        println!("\n=== Chapter 3 sentences around Đỗ Ninh ===");
+        for s in sentences.iter() {
+            if s.raw_text.contains("khước từ việc") || s.raw_text.contains("Nào, cùng ăn nhé") || s.raw_text.contains("bát mì") {
+                println!("  [{}] {}", s.index, s.raw_text);
+            }
+        }
+    }
 }

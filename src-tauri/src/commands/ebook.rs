@@ -45,6 +45,7 @@ pub async fn import_ebook_to_project(
             total_sentences: 0,
             completed_sentences: 0,
             total_duration: 0.0,
+            status: "active".to_string(),
             created_at: now.clone(),
             updated_at: now,
         };
@@ -66,6 +67,8 @@ pub async fn import_ebook_to_project(
                 sentence_count,
                 ready_sentence_count: 0,
                 total_duration: 0.0,
+                bgm_path: None,
+                bgm_volume: Some(0.2),
             });
 
             all_sentences.extend(sentences);

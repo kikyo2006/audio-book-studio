@@ -14,11 +14,16 @@ export function formatDuration(seconds: number): string {
 }
 
 export function formatTimeHours(seconds: number): string {
-  if (isNaN(seconds) || seconds <= 0) return "0 phút";
+  if (isNaN(seconds) || seconds <= 0) return "0s";
   const hours = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+
   if (hours > 0) {
     return `${hours}h ${mins}m`;
   }
-  return `${mins} phút`;
+  if (mins > 0) {
+    return `${mins}m ${secs}s`;
+  }
+  return `${secs}s`;
 }

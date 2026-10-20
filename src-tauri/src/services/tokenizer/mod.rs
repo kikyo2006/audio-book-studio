@@ -62,28 +62,53 @@ fn split_into_sentences(paragraph: &str) -> Vec<String> {
     while i < len {
         let c = chars[i];
 
-        // Kiểm tra dấu câu kết thúc: . ! ?
-        if c == '.' || c == '!' || c == '?' {
-            // Kiểm tra dấu ba chấm ...
+        // Kiểm tra dấu câu kết thúc: . ! ? hoặc …
+        if c == '.' || c == '!' || c == '?' || c == '…' {
+            // 1. Kiểm tra dấu ba chấm ...
             if c == '.' && i + 1 < len && chars[i + 1] == '.' {
                 while i < len && chars[i] == '.' {
                     i += 1;
                 }
-                // Nếu sau dấu ... là ký tự trắng hoặc hết câu, ta kết thúc một câu
-                if i >= len || chars[i].is_whitespace() || chars[i] == '"' || chars[i] == '”' {
-                    if i < len && (chars[i] == '"' || chars[i] == '”') {
+                // Nếu sau dấu ... là ký tự trắng, ngoặc kép hoặc hết chuỗi
+                if i >= len || chars[i].is_whitespace() || chars[i] == '"' || chars[i] == '”' || chars[i] == '\'' {
+                    if i < len && (chars[i] == '"' || chars[i] == '”' || chars[i] == '\'') {
                         i += 1;
                     }
                     let seg = paragraph[start..char_idx_to_byte_idx(paragraph, i)].trim();
                     if !seg.is_empty() {
-                        results.push(seg.to_string());
+                        if seg.chars().count() > 350 {
+                            results.extend(split_long_sentence(seg));
+                        } else {
+                            results.push(seg.to_string());
+                        }
                     }
                     start = char_idx_to_byte_idx(paragraph, i);
                 }
                 continue;
             }
 
-            // Kiểm tra chữ viết tắt (abbreviation) hoặc số thập phân (3.14)
+            // 2. Dấu ba chấm unicode …
+            if c == '…' {
+                let mut end_char_idx = i + 1;
+                if end_char_idx < len && (chars[end_char_idx] == '"' || chars[end_char_idx] == '”' || chars[end_char_idx] == '\'') {
+                    end_char_idx += 1;
+                }
+                if end_char_idx >= len || chars[end_char_idx].is_whitespace() {
+                    let seg = paragraph[start..char_idx_to_byte_idx(paragraph, end_char_idx)].trim();
+                    if !seg.is_empty() {
+                        if seg.chars().count() > 350 {
+                            results.extend(split_long_sentence(seg));
+                        } else {
+                            results.push(seg.to_string());
+                        }
+                    }
+                    start = char_idx_to_byte_idx(paragraph, end_char_idx);
+                    i = end_char_idx;
+                    continue;
+                }
+            }
+
+            // 3. Kiểm tra chữ viết tắt (abbreviation) hoặc số thập phân (3.14)
             if c == '.' {
                 // Số thập phân: trước là số và sau là số (3.14)
                 if i > 0 && chars[i - 1].is_ascii_digit() && i + 1 < len && chars[i + 1].is_ascii_digit() {
@@ -99,7 +124,7 @@ fn split_into_sentences(paragraph: &str) -> Vec<String> {
                 }
             }
 
-            // Nếu sau dấu chấm là ngoặc kép đóng: " hoặc ”
+            // 4. Nếu sau dấu kết thúc là ngoặc kép đóng: " hoặc ” hoặc '
             let mut end_char_idx = i + 1;
             if end_char_idx < len && (chars[end_char_idx] == '"' || chars[end_char_idx] == '”' || chars[end_char_idx] == '\'') {
                 end_char_idx += 1;
@@ -109,8 +134,8 @@ fn split_into_sentences(paragraph: &str) -> Vec<String> {
             if end_char_idx >= len || chars[end_char_idx].is_whitespace() {
                 let seg = paragraph[start..char_idx_to_byte_idx(paragraph, end_char_idx)].trim();
                 if !seg.is_empty() {
-                    // Nếu câu quá dài (> 220 ký tự), chia nhỏ thêm tại dấu phẩy
-                    if seg.chars().count() > 220 {
+                    // Nếu câu quá dài (> 350 ký tự), chia nhỏ thêm tại dấu phân cách tự nhiên
+                    if seg.chars().count() > 350 {
                         let sub_splits = split_long_sentence(seg);
                         results.extend(sub_splits);
                     } else {
@@ -128,7 +153,7 @@ fn split_into_sentences(paragraph: &str) -> Vec<String> {
     if start < paragraph.len() {
         let remaining = paragraph[start..].trim();
         if !remaining.is_empty() {
-            if remaining.chars().count() > 220 {
+            if remaining.chars().count() > 350 {
                 let sub_splits = split_long_sentence(remaining);
                 results.extend(sub_splits);
             } else {
@@ -140,23 +165,42 @@ fn split_into_sentences(paragraph: &str) -> Vec<String> {
     results
 }
 
+/// Chia nhỏ câu dài (> 350 ký tự) tại các điểm ngắt tự nhiên (;, :, ,)
 fn split_long_sentence(text: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let comma_splits: Vec<&str> = text.split(',').collect();
-
-    if comma_splits.len() <= 1 {
+    if text.chars().count() <= 350 {
         return vec![text.to_string()];
     }
 
+    // Tách ưu tiên theo dấu chấm phẩy hoặc hai chấm nếu có
+    let delimiter = if text.contains("; ") {
+        "; "
+    } else if text.contains(": ") {
+        ": "
+    } else if text.contains(", ") {
+        ", "
+    } else {
+        return vec![text.to_string()];
+    };
+
+    let splits: Vec<&str> = text.split(delimiter).collect();
+    if splits.len() <= 1 {
+        return vec![text.to_string()];
+    }
+
+    let mut parts = Vec::new();
     let mut current = String::new();
-    for (idx, part) in comma_splits.iter().enumerate() {
+
+    for (idx, part) in splits.iter().enumerate() {
         if !current.is_empty() {
-            current.push_str(", ");
+            current.push_str(delimiter);
         }
         current.push_str(part.trim());
 
-        // Nếu gom lại đủ độ dài hoặc là đoạn cuối
-        if current.chars().count() >= 120 || idx == comma_splits.len() - 1 {
+        let count = current.chars().count();
+        let is_last = idx == splits.len() - 1;
+
+        // Nếu đã đủ độ dài (>= 180 ký tự) hoặc là đoạn cuối
+        if count >= 180 || is_last {
             let trimmed = current.trim();
             if !trimmed.is_empty() {
                 parts.push(trimmed.to_string());
@@ -207,7 +251,7 @@ pub fn normalize_sentence(s: &str) -> String {
         .replace('’', "'")
         .replace('–', "—");
 
-    // Nếu bắt đầu bằng gạch ngang mà không có cách
+    // Nếu bắt đầu bằng gạch ngang mà không có khoảng cách
     if text.starts_with("—") && !text.starts_with("— ") {
         text = format!("— {}", &text[1..]);
     } else if text.starts_with("- ") {

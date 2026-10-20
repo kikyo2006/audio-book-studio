@@ -12,7 +12,11 @@ use db::Database;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(
+            tauri_plugin_log::Builder::default()
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
@@ -30,6 +34,13 @@ pub fn run() {
                 .map_err(|e| Box::<dyn std::error::Error>::from(e))?;
 
             app.manage(Arc::new(database));
+
+            // Set dynamic title bar window icon
+            if let Some(icon) = app.default_window_icon() {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_icon(icon.clone());
+                }
+            }
 
             Ok(())
         })
@@ -49,7 +60,26 @@ pub fn run() {
             commands::project::get_project_characters,
             commands::project::delete_project_character,
             commands::project::assign_sentence_speaker,
-            commands::project::batch_assign_dialogues
+            commands::project::batch_assign_dialogues,
+            commands::project::batch_assign_narration,
+            commands::project::batch_assign_dialogues_extended,
+            commands::project::batch_assign_speaker_range,
+            commands::project::split_sentences_to_chapter,
+            commands::project::rename_chapter,
+            commands::project::delete_chapter,
+            commands::project::reorder_chapter,
+            commands::project::add_silence_sentence,
+            commands::project::update_silence_duration,
+            commands::project::delete_sentence,
+            commands::project::batch_update_sentences_text,
+            commands::project::insert_blank_sentences,
+            commands::project::update_chapter_bgm,
+            commands::project::update_project_cover,
+            commands::project::delete_project,
+            commands::project::update_project_status,
+            commands::project::get_casting_presets,
+            commands::project::save_casting_preset,
+            commands::project::delete_casting_preset
         ])
         .run(tauri::generate_context!())
         .expect("Lỗi khởi động ứng dụng Tauri");

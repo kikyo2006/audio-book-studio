@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { VoicePreset } from "@/types";
 
 export const VOICE_PRESETS: VoicePreset[] = [
@@ -43,6 +44,7 @@ export const VOICE_PRESETS: VoicePreset[] = [
 interface StudioSettingsState {
   serverUrl: string;
   selectedVoice: string;
+  dialogueVoice: string;
   speed: number;
   temperature: number;
   isServerOnline: boolean;
@@ -53,6 +55,7 @@ interface StudioSettingsState {
 
   setServerUrl: (url: string) => void;
   setSelectedVoice: (voice: string) => void;
+  setDialogueVoice: (voice: string) => void;
   setSpeed: (speed: number) => void;
   setTemperature: (temp: number) => void;
   setIsServerOnline: (online: boolean) => void;
@@ -62,24 +65,49 @@ interface StudioSettingsState {
   setParagraphPauseMs: (ms: number) => void;
 }
 
-export const useStudioSettingsStore = create<StudioSettingsState>((set) => ({
-  serverUrl: "http://localhost:8880",
-  selectedVoice: "Thảo Nhi",
-  speed: 1.0,
-  temperature: 0.45,
-  isServerOnline: false,
-  continuousPlay: true,
-  waveformZoom: 35,
-  sentencePauseMs: 350,
-  paragraphPauseMs: 750,
+export const useStudioSettingsStore = create<StudioSettingsState>()(
+  persist(
+    (set) => ({
+      serverUrl: "http://127.0.0.1:8880",
+      selectedVoice: "Thảo Nhi",
+      dialogueVoice: "Thảo Nhi",
+      speed: 1.0,
+      temperature: 0.45,
+      isServerOnline: false,
+      continuousPlay: true,
+      waveformZoom: 35,
+      sentencePauseMs: 350,
+      paragraphPauseMs: 750,
 
-  setServerUrl: (url) => set({ serverUrl: url }),
-  setSelectedVoice: (voice) => set({ selectedVoice: voice }),
-  setSpeed: (speed) => set({ speed }),
-  setTemperature: (temperature) => set({ temperature }),
-  setIsServerOnline: (isServerOnline) => set({ isServerOnline }),
-  setContinuousPlay: (continuousPlay) => set({ continuousPlay }),
-  setWaveformZoom: (waveformZoom) => set({ waveformZoom }),
-  setSentencePauseMs: (sentencePauseMs) => set({ sentencePauseMs }),
-  setParagraphPauseMs: (paragraphPauseMs) => set({ paragraphPauseMs }),
-}));
+      setServerUrl: (url) => set({ serverUrl: url }),
+      setSelectedVoice: (voice) => set({ selectedVoice: voice }),
+      setDialogueVoice: (dialogueVoice) => set({ dialogueVoice }),
+      setSpeed: (speed) => set({ speed }),
+      setTemperature: (temperature) => set({ temperature }),
+      setIsServerOnline: (isServerOnline) => set({ isServerOnline }),
+      setContinuousPlay: (continuousPlay) => set({ continuousPlay }),
+      setWaveformZoom: (waveformZoom) => set({ waveformZoom }),
+      setSentencePauseMs: (sentencePauseMs) => set({ sentencePauseMs }),
+      setParagraphPauseMs: (paragraphPauseMs) => set({ paragraphPauseMs }),
+    }),
+    {
+      name: "bookstudio-settings-store",
+      onRehydrateStorage: () => (state) => {
+        if (state && state.serverUrl && state.serverUrl.includes("localhost")) {
+          state.serverUrl = state.serverUrl.replace("localhost", "127.0.0.1");
+        }
+      },
+      partialize: (state) => ({
+        serverUrl: state.serverUrl,
+        selectedVoice: state.selectedVoice,
+        dialogueVoice: state.dialogueVoice,
+        speed: state.speed,
+        temperature: state.temperature,
+        continuousPlay: state.continuousPlay,
+        waveformZoom: state.waveformZoom,
+        sentencePauseMs: state.sentencePauseMs,
+        paragraphPauseMs: state.paragraphPauseMs,
+      }),
+    }
+  )
+);

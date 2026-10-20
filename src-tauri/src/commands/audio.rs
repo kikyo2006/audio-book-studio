@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::db::Database;
-use crate::services::audio::{concatenate_sentence_wavs, AudioConcatenateOptions};
+use crate::services::audio::AudioConcatenateOptions;
 
 #[tauri::command]
 pub async fn export_chapter_audio(
@@ -13,6 +13,8 @@ pub async fn export_chapter_audio(
     output_path: String,
     sentence_pause_ms: u32,
     paragraph_pause_ms: u32,
+    mix_bgm: Option<bool>,
+    bgm_volume: Option<f32>,
     db: State<'_, Arc<Database>>,
 ) -> Result<f64, String> {
     let db = db.inner().clone();
@@ -41,7 +43,25 @@ pub async fn export_chapter_audio(
         };
 
         let target = Path::new(&output_path);
-        concatenate_sentence_wavs(&audio_paths, target, &opts)
+
+        let should_mix = mix_bgm.unwrap_or(false);
+        if should_mix {
+            let chapter = db.get_chapter_by_id(&chapter_id)?;
+            let bgm_opt = chapter.as_ref().and_then(|c| c.bgm_path.as_ref()).map(PathBuf::from);
+            let vol = bgm_volume.unwrap_or_else(|| {
+                chapter.as_ref().and_then(|c| c.bgm_volume).unwrap_or(0.2) as f32
+            });
+
+            crate::services::audio::concatenate_sentence_wavs_with_bgm(
+                &audio_paths,
+                target,
+                &opts,
+                bgm_opt.as_deref(),
+                vol,
+            )
+        } else {
+            crate::services::audio::concatenate_sentence_wavs(&audio_paths, target, &opts)
+        }
     })
     .await
     .map_err(|e| format!("Task export lỗi: {}", e))?

@@ -16,6 +16,8 @@ pub struct Project {
     pub total_duration: f64,
     pub created_at: String,
     pub updated_at: String,
+    /// 'active' | 'completed' | 'dropped'
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +30,8 @@ pub struct Chapter {
     pub sentence_count: usize,
     pub ready_sentence_count: usize,
     pub total_duration: f64,
+    pub bgm_path: Option<String>,
+    pub bgm_volume: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,4 +79,34 @@ pub struct CharacterProfile {
     pub color: String,
     pub is_narrator: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleVoiceSetting {
+    pub voice: String,
+    pub speed: f32,
+    pub temperature: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresetCharacter {
+    pub id: String,
+    pub name: String,
+    pub voice: String,
+    pub speed: f32,
+    pub temperature: f32,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CastingPreset {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub narrator: RoleVoiceSetting,
+    pub dialogue: RoleVoiceSetting,
+    pub characters: Vec<PresetCharacter>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 

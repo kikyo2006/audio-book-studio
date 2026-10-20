@@ -35,10 +35,15 @@ interface ProjectState {
   setBatchProgress: (progress: { current: number; total: number }) => void;
 
   updateSentenceStatus: (id: string, status: SentenceStatus, error?: string) => void;
-  updateSentenceAudio: (id: string, audioPath: string, duration: number) => void;
+  updateSentenceAudio: (id: string, audioPath: string, duration: number, voice?: string) => void;
   updateSentenceText: (id: string, text: string) => void;
+  batchUpdateSentencesText: (updates: Array<{ id: string; text: string }>) => void;
   assignSpeakerToSentence: (sentenceId: string, char: CharacterProfile) => void;
   batchAssignDialoguesToSpeaker: (char: CharacterProfile) => void;
+  updateChapterBgm: (chapterId: string, bgmPath: string | null, bgmVolume?: number) => void;
+  removeProject: (projectId: string) => void;
+  updateProjectCover: (projectId: string, coverBase64: string) => void;
+  updateProjectStatus: (projectId: string, status: string) => void;
 }
 
 export const useProjectStore = create<ProjectState>((set) => ({
@@ -84,20 +89,48 @@ export const useProjectStore = create<ProjectState>((set) => ({
       ),
     })),
 
-  updateSentenceAudio: (id, audioPath, duration) =>
-    set((state) => ({
-      sentences: state.sentences.map((s) =>
+  updateSentenceAudio: (id, audioPath, duration, voice) =>
+    set((state) => {
+      const nextSentences = state.sentences.map((s) =>
         s.id === id
           ? {
               ...s,
               audio_path: audioPath,
               duration,
-              status: "ready",
+              voice: voice || s.voice,
+              status: "ready" as const,
               error_message: undefined,
+              updated_at: new Date().toISOString(),
             }
           : s
-      ),
-    })),
+      );
+      const readySentences = nextSentences.filter((s) => s.status === "ready");
+      const readyCount = readySentences.length;
+      const chapterDuration = readySentences.reduce((sum, s) => sum + (s.duration || 0), 0);
+
+      const nextChapters = state.chapters.map((c) =>
+        c.id === state.activeChapter?.id
+          ? { ...c, ready_sentence_count: readyCount, total_duration: chapterDuration }
+          : c
+      );
+      const nextActiveChapter = state.activeChapter
+        ? { ...state.activeChapter, ready_sentence_count: readyCount, total_duration: chapterDuration }
+        : null;
+
+      const nextActiveProject = state.activeProject
+        ? {
+            ...state.activeProject,
+            total_duration: nextChapters.reduce((sum, c) => sum + (c.total_duration || 0), 0),
+          }
+        : null;
+
+      return {
+        sentences: nextSentences,
+        chapters: nextChapters,
+        activeChapter: nextActiveChapter,
+        activeProject: nextActiveProject,
+      };
+    }),
 
   updateSentenceText: (id, text) =>
     set((state) => ({
@@ -105,6 +138,20 @@ export const useProjectStore = create<ProjectState>((set) => ({
         s.id === id ? { ...s, clean_text: text, status: "pending" } : s
       ),
     })),
+
+  batchUpdateSentencesText: (updates) =>
+    set((state) => {
+      const updateMap = new Map(updates.map((u) => [u.id, u.text]));
+      return {
+        sentences: state.sentences.map((s) => {
+          const newText = updateMap.get(s.id);
+          if (newText !== undefined) {
+            return { ...s, clean_text: newText, status: "pending" as const };
+          }
+          return s;
+        }),
+      };
+    }),
 
   assignSpeakerToSentence: (sentenceId, char) =>
     set((state) => ({
@@ -136,5 +183,64 @@ export const useProjectStore = create<ProjectState>((set) => ({
             }
           : s
       ),
+    })),
+
+  updateChapterBgm: (chapterId, bgmPath, bgmVolume) =>
+    set((state) => {
+      const updatedChapters = state.chapters.map((c) =>
+        c.id === chapterId
+          ? {
+              ...c,
+              bgm_path: bgmPath,
+              bgm_volume: bgmVolume !== undefined ? bgmVolume : c.bgm_volume,
+            }
+          : c
+      );
+      const updatedActiveChapter =
+        state.activeChapter?.id === chapterId
+          ? {
+              ...state.activeChapter,
+              bgm_path: bgmPath,
+              bgm_volume:
+                bgmVolume !== undefined
+                  ? bgmVolume
+                  : state.activeChapter.bgm_volume,
+            }
+          : state.activeChapter;
+
+      return {
+        chapters: updatedChapters,
+        activeChapter: updatedActiveChapter,
+      };
+    }),
+
+  updateProjectCover: (projectId, coverBase64) =>
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId ? { ...p, cover_base64: coverBase64 } : p
+      ),
+      activeProject:
+        state.activeProject?.id === projectId
+          ? { ...state.activeProject, cover_base64: coverBase64 }
+          : state.activeProject,
+    })),
+
+  updateProjectStatus: (projectId, status) =>
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId ? { ...p, status } : p
+      ),
+    })),
+
+  removeProject: (projectId) =>
+    set((state) => ({
+      projects: state.projects.filter((p) => p.id !== projectId),
+      activeProject:
+        state.activeProject?.id === projectId ? null : state.activeProject,
+      chapters: state.activeProject?.id === projectId ? [] : state.chapters,
+      activeChapter:
+        state.activeProject?.id === projectId ? null : state.activeChapter,
+      sentences: state.activeProject?.id === projectId ? [] : state.sentences,
+      characters: state.activeProject?.id === projectId ? [] : state.characters,
     })),
 }));
