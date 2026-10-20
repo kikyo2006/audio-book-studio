@@ -81,6 +81,21 @@
 ## 🛡️ Coding Standards & Safety Guidelines
 
 - **Check code & Logic:** Double-check tất cả biến và luồng điều kiện (null/undefined trong TypeScript, `Option`/`Result` handling trong Rust, không dùng `.unwrap()` cẩu thả gây panic desktop app).
+- **🎨 UI Context Menus & Popovers Background (Bắt buộc nền đặc):**
+  - Dự án sử dụng Tailwind CSS v4 trên nền ứng dụng Desktop tối (Tauri). Khi tạo Context Menu chuột phải, Dropdown hoặc Popover nổi, **tuyệt đối không chỉ dùng class bán trong suốt như `bg-zinc-900/95` hay `backdrop-blur`**, vì trong các container chia cột (`aside`, virtualized table) giá trị alpha modifier rất dễ bị khử khiến nền menu bị trong suốt/xuyên thấu.
+  - **Quy chuẩn bắt buộc:**
+    1. **Nền đặc 100%:** Luôn áp dụng inline style màu nền đặc và đổ bóng: `backgroundColor: "#18181b"`, `borderColor: "#3f3f46"`, `boxShadow: "0 20px 40px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(255, 255, 255, 0.1)"`.
+    2. **Portal ra `document.body`:** Với mọi Context Menu chuột phải định vị theo toạ độ `(x, y)`, bắt buộc dùng `createPortal(..., document.body)` để thoát khỏi Stacking Context, filter và overflow của thẻ cha.
+    3. **Backdrop overlay đóng menu:** Đặt một thẻ overlay vô hình (`fixed inset-0 z-[9998]`) phía dưới menu (`z-[9999]`) bắt cả sự kiện `onClick` lẫn `onContextMenu` để click ra ngoài là đóng ngay lập tức, không để lại menu mồ côi.
+    4. **Submenu lồng nhau (Tránh bị đè chữ / hiển thị sai vị trí):**
+       - **Tuyệt đối không dùng class `left-full` hay `right-full` của Tailwind v4:** Các class position percentage như `left-full` / `right-full` dễ bị bỏ sót trong engine Tailwind v4 khiến submenu rơi về `left: 0`, đè lên menu chính và bị các dòng bên dưới của menu chính vẽ xuyên/đè lên.
+       - **Bắt buộc dùng inline style:** `position: "absolute"`, `top: 0`, `...(isNearRight ? { right: "100%", marginRight: "4px" } : { left: "100%", marginLeft: "4px" })`, `zIndex: 10000`.
+       - **Tự động lật hướng thông minh:** Tính toán `isNearRight = posX > (window.innerWidth - 460)` để tự động trượt submenu sang trái khi menu chính mở gần mép phải màn hình.
+       - **Dọn dẹp submenu khi hover item khác:** Trên các mục menu cha không có submenu, luôn gán `onMouseEnter={() => setActiveSubmenu(null)}` để đóng submenu ngay lập tức, không để submenu tồn tại lơ lửng đè các tác vụ khác.
+    5. **Độ rộng Submenu & Chống co bóp / rớt dòng (No Wrapping):**
+       - **Không phụ thuộc vào class `min-w-[...]` của Tailwind:** Engine Tailwind v4 có thể bỏ qua arbitrary min-width class khiến submenu bị trình duyệt bóp nghẹt độ rộng xuống còn ~80-100px, làm chữ bị rớt 3-4 dòng xấu xí và icon bị méo mó.
+       - **Bắt buộc áp dụng inline style kích thước rộng rãi:** Luôn khai báo `minWidth: "230px"`, `width: "max-content"`, `whiteSpace: "nowrap"` trong inline style của submenu container.
+       - **Bảo vệ item con:** Mọi button hoặc label bên trong submenu phải có class `whitespace-nowrap`, padding thoải mái (`px-3 py-2`), và icon luôn phải có `shrink-0` để không bao giờ bị biến dạng.
 - **Sentence-Level Granularity:** Tuyệt đối không sinh audio nguyên cả chương một lần. Luôn chia nhỏ thành từng câu (Sentence-level chunks). Điều này cho phép:
   1. Retry/Regenerate từng câu bị lỗi mà không tốn công đọc lại cả chương.
   2. Bắt đầu nghe thử ngay câu đầu tiên trong lúc các câu sau đang tiếp tục sinh âm (Streaming preview).

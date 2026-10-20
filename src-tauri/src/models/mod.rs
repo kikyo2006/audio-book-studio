@@ -20,6 +20,10 @@ pub struct Project {
     pub status: String,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chapter {
     pub id: String,
@@ -32,6 +36,14 @@ pub struct Chapter {
     pub total_duration: f64,
     pub bgm_path: Option<String>,
     pub bgm_volume: Option<f64>,
+    #[serde(default = "default_true")]
+    pub is_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeChaptersResult {
+    pub chapters: Vec<Chapter>,
+    pub merged_chapter_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

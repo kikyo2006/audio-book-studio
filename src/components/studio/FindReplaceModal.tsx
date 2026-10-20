@@ -15,9 +15,12 @@ import {
 } from "lucide-react";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useFindReplaceStore } from "@/stores/useFindReplaceStore";
+import { useConfirmStore } from "@/stores/useConfirmStore";
 import {
   tauriUpdateSentenceText,
   tauriBatchUpdateSentencesText,
+  tauriGetAllProjectSentences,
+  tauriGetSentences,
 } from "@/lib/tauri";
 import type { SentenceItem } from "@/types";
 
@@ -35,13 +38,19 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
   onScrollToSentence,
 }) => {
   const {
+    activeProject,
+    chapters,
     activeChapter,
     sentences,
     selectedSentenceId,
+    setActiveChapter,
+    setSentences,
     setSelectedSentenceId,
     updateSentenceText,
     batchUpdateSentencesText,
   } = useProjectStore();
+
+  const { askConfirm } = useConfirmStore();
 
   const { setSearchQuery, scrollToIndexCallback } = useFindReplaceStore();
 
@@ -50,6 +59,7 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
   const [replaceWith, setReplaceWith] = useState("");
 
   // Options
+  const [searchScope, setSearchScope] = useState<"current" | "all">("current");
   const [matchCase, setMatchCase] = useState(false);
   const [matchWholeWord, setMatchWholeWord] = useState(false);
   const [wrapAround, setWrapAround] = useState(true);
@@ -158,7 +168,7 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
 
   // Core Search Engine: Find Next or Previous
   const handleFind = useCallback(
-    (direction: "next" | "prev" = backwardDirection ? "prev" : "next") => {
+    async (direction: "next" | "prev" = backwardDirection ? "prev" : "next") => {
       if (!findWhat.trim()) {
         setStatusMessage("Vui lòng nhập từ khóa tìm kiếm.");
         setStatusType("error");
@@ -172,94 +182,200 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
         return null;
       }
 
-      if (sentences.length === 0) {
-        setStatusMessage("Chương hiện tại không có câu nào.");
-        setStatusType("info");
-        return null;
-      }
-
-      // Determine current index from selectedSentenceId
-      const currentIndex = sentences.findIndex((s) => s.id === selectedSentenceId);
-      const total = sentences.length;
-
-      let foundIndex = -1;
-
-      if (direction === "next") {
-        const start = currentIndex >= 0 ? currentIndex + 1 : 0;
-        // Search forward
-        for (let i = start; i < total; i++) {
-          regex.lastIndex = 0;
-          if (regex.test(sentences[i].clean_text)) {
-            foundIndex = i;
-            break;
-          }
+      if (searchScope === "current") {
+        if (sentences.length === 0) {
+          setStatusMessage("Chương hiện tại không có câu nào.");
+          setStatusType("info");
+          return null;
         }
-        // Wrap around if enabled
-        if (foundIndex === -1 && wrapAround && start > 0) {
-          for (let i = 0; i < start; i++) {
+
+        const currentIndex = sentences.findIndex((s) => s.id === selectedSentenceId);
+        const total = sentences.length;
+        let foundIndex = -1;
+
+        if (direction === "next") {
+          const start = currentIndex >= 0 ? currentIndex + 1 : 0;
+          for (let i = start; i < total; i++) {
             regex.lastIndex = 0;
             if (regex.test(sentences[i].clean_text)) {
               foundIndex = i;
               break;
             }
           }
-        }
-      } else {
-        // Prev direction
-        const start = currentIndex >= 0 ? currentIndex - 1 : total - 1;
-        for (let i = start; i >= 0; i--) {
-          regex.lastIndex = 0;
-          if (regex.test(sentences[i].clean_text)) {
-            foundIndex = i;
-            break;
+          if (foundIndex === -1 && wrapAround && start > 0) {
+            for (let i = 0; i < start; i++) {
+              regex.lastIndex = 0;
+              if (regex.test(sentences[i].clean_text)) {
+                foundIndex = i;
+                break;
+              }
+            }
           }
-        }
-        // Wrap around if enabled
-        if (foundIndex === -1 && wrapAround && start < total - 1) {
-          for (let i = total - 1; i > start; i--) {
+        } else {
+          const start = currentIndex >= 0 ? currentIndex - 1 : total - 1;
+          for (let i = start; i >= 0; i--) {
             regex.lastIndex = 0;
             if (regex.test(sentences[i].clean_text)) {
               foundIndex = i;
               break;
             }
           }
+          if (foundIndex === -1 && wrapAround && start < total - 1) {
+            for (let i = total - 1; i > start; i--) {
+              regex.lastIndex = 0;
+              if (regex.test(sentences[i].clean_text)) {
+                foundIndex = i;
+                break;
+              }
+            }
+          }
         }
-      }
 
-      if (foundIndex !== -1) {
-        const target = sentences[foundIndex];
-        setSelectedSentenceId(target.id);
-        if (onScrollToSentence) {
-          onScrollToSentence(foundIndex);
-        } else if (scrollToIndexCallback) {
-          scrollToIndexCallback(foundIndex);
+        if (foundIndex !== -1) {
+          const target = sentences[foundIndex];
+          setSelectedSentenceId(target.id);
+          if (onScrollToSentence) {
+            onScrollToSentence(foundIndex);
+          } else if (scrollToIndexCallback) {
+            scrollToIndexCallback(foundIndex);
+          }
+          setStatusMessage(
+            `Tìm thấy tại câu #${target.index} (câu thứ ${foundIndex + 1}/${total})`
+          );
+          setStatusType("success");
+          return { index: foundIndex, sentence: target };
+        } else {
+          setStatusMessage(`Không tìm thấy kết quả phù hợp trong chương này: "${findWhat}"`);
+          setStatusType("info");
+          return null;
         }
-        setStatusMessage(
-          `Tìm thấy tại câu #${target.index} (câu thứ ${foundIndex + 1}/${total})`
-        );
-        setStatusType("success");
-        return { index: foundIndex, sentence: target };
       } else {
-        setStatusMessage(`Không tìm thấy kết quả phù hợp: "${findWhat}"`);
-        setStatusType("info");
-        return null;
+        // Tìm trên toàn bộ các chương của sách
+        if (!activeProject) return null;
+        setIsProcessing(true);
+        try {
+          const allSentences = await tauriGetAllProjectSentences(activeProject.id);
+          if (allSentences.length === 0) {
+            setStatusMessage("Cuốn sách chưa có câu nào.");
+            setStatusType("info");
+            return null;
+          }
+
+          const total = allSentences.length;
+          const currentIndex = allSentences.findIndex((s) => s.id === selectedSentenceId);
+          let foundIndex = -1;
+
+          if (direction === "next") {
+            const start = currentIndex >= 0 ? currentIndex + 1 : 0;
+            for (let i = start; i < total; i++) {
+              regex.lastIndex = 0;
+              if (regex.test(allSentences[i].clean_text)) {
+                foundIndex = i;
+                break;
+              }
+            }
+            if (foundIndex === -1 && wrapAround && start > 0) {
+              for (let i = 0; i < start; i++) {
+                regex.lastIndex = 0;
+                if (regex.test(allSentences[i].clean_text)) {
+                  foundIndex = i;
+                  break;
+                }
+              }
+            }
+          } else {
+            const start = currentIndex >= 0 ? currentIndex - 1 : total - 1;
+            for (let i = start; i >= 0; i--) {
+              regex.lastIndex = 0;
+              if (regex.test(allSentences[i].clean_text)) {
+                foundIndex = i;
+                break;
+              }
+            }
+            if (foundIndex === -1 && wrapAround && start < total - 1) {
+              for (let i = total - 1; i > start; i--) {
+                regex.lastIndex = 0;
+                if (regex.test(allSentences[i].clean_text)) {
+                  foundIndex = i;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (foundIndex !== -1) {
+            const target = allSentences[foundIndex];
+            const targetChap = chapters.find((c) => c.id === target.chapter_id);
+            const chapTitle =
+              targetChap?.title?.trim() ||
+              (targetChap ? `Chương ${targetChap.index}` : "Chương");
+
+            if (target.chapter_id !== activeChapter?.id && targetChap) {
+              setActiveChapter(targetChap);
+              const newSentences = await tauriGetSentences(targetChap.id);
+              setSentences(newSentences);
+              setSelectedSentenceId(target.id);
+              const localIndex = newSentences.findIndex((s) => s.id === target.id);
+              if (localIndex >= 0) {
+                if (onScrollToSentence) {
+                  onScrollToSentence(localIndex);
+                } else if (scrollToIndexCallback) {
+                  scrollToIndexCallback(localIndex);
+                }
+              }
+            } else {
+              setSelectedSentenceId(target.id);
+              const localIndex = sentences.findIndex((s) => s.id === target.id);
+              if (localIndex >= 0) {
+                if (onScrollToSentence) {
+                  onScrollToSentence(localIndex);
+                } else if (scrollToIndexCallback) {
+                  scrollToIndexCallback(localIndex);
+                }
+              }
+            }
+
+            setStatusMessage(
+              `Tìm thấy tại câu #${target.index} — ${chapTitle} (kết quả ${foundIndex + 1}/${total})`
+            );
+            setStatusType("success");
+            return { index: foundIndex, sentence: target };
+          } else {
+            setStatusMessage(`Không tìm thấy kết quả phù hợp trên toàn bộ sách: "${findWhat}"`);
+            setStatusType("info");
+            return null;
+          }
+        } catch (err) {
+          console.error("Lỗi tìm kiếm trên toàn bộ sách:", err);
+          setStatusMessage("Đã xảy ra lỗi khi tìm kiếm trên toàn bộ sách.");
+          setStatusType("error");
+          return null;
+        } finally {
+          setIsProcessing(false);
+        }
       }
     },
     [
       findWhat,
       backwardDirection,
       getMatcher,
+      searchScope,
       sentences,
       selectedSentenceId,
       wrapAround,
+      activeProject,
+      activeChapter,
+      chapters,
+      setActiveChapter,
+      setSentences,
       setSelectedSentenceId,
       onScrollToSentence,
       scrollToIndexCallback,
     ]
   );
 
-  // Count / Find All in Current Chapter
-  const handleCount = useCallback(() => {
+  // Count / Find All
+  const handleCount = useCallback(async () => {
     if (!findWhat.trim()) {
       setStatusMessage("Vui lòng nhập từ khóa tìm kiếm.");
       setStatusType("error");
@@ -273,28 +389,65 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
       return;
     }
 
-    let matchCount = 0;
-    let sentenceCount = 0;
+    if (searchScope === "current") {
+      let matchCount = 0;
+      let sentenceCount = 0;
 
-    sentences.forEach((s) => {
-      regex.lastIndex = 0;
-      const matches = s.clean_text.match(regex);
-      if (matches && matches.length > 0) {
-        matchCount += matches.length;
-        sentenceCount += 1;
+      sentences.forEach((s) => {
+        regex.lastIndex = 0;
+        const matches = s.clean_text.match(regex);
+        if (matches && matches.length > 0) {
+          matchCount += matches.length;
+          sentenceCount += 1;
+        }
+      });
+
+      if (matchCount > 0) {
+        setStatusMessage(
+          `Tìm thấy ${matchCount} lần xuất hiện trong ${sentenceCount} câu của chương này.`
+        );
+        setStatusType("success");
+      } else {
+        setStatusMessage(`Không tìm thấy kết quả phù hợp trong chương này cho: "${findWhat}"`);
+        setStatusType("info");
       }
-    });
-
-    if (matchCount > 0) {
-      setStatusMessage(
-        `Tìm thấy ${matchCount} lần xuất hiện trong ${sentenceCount} câu của chương này.`
-      );
-      setStatusType("success");
     } else {
-      setStatusMessage(`Không tìm thấy kết quả phù hợp nào cho: "${findWhat}"`);
-      setStatusType("info");
+      if (!activeProject) return;
+      setIsProcessing(true);
+      try {
+        const allSentences = await tauriGetAllProjectSentences(activeProject.id);
+        let matchCount = 0;
+        let sentenceCount = 0;
+        const matchingChapterIds = new Set<string>();
+
+        for (const s of allSentences) {
+          regex.lastIndex = 0;
+          const matches = s.clean_text.match(regex);
+          if (matches && matches.length > 0) {
+            matchCount += matches.length;
+            sentenceCount += 1;
+            matchingChapterIds.add(s.chapter_id);
+          }
+        }
+
+        if (matchCount > 0) {
+          setStatusMessage(
+            `Tìm thấy ${matchCount} lần xuất hiện trong ${sentenceCount} câu thuộc ${matchingChapterIds.size} chương trên toàn bộ sách.`
+          );
+          setStatusType("success");
+        } else {
+          setStatusMessage(
+            `Không tìm thấy kết quả phù hợp nào trên toàn bộ sách cho: "${findWhat}"`
+          );
+          setStatusType("info");
+        }
+      } catch (err) {
+        console.error("Lỗi đếm từ khóa trên toàn bộ sách:", err);
+      } finally {
+        setIsProcessing(false);
+      }
     }
-  }, [findWhat, getMatcher, sentences]);
+  }, [findWhat, getMatcher, searchScope, sentences, activeProject]);
 
   // Replace Current Match
   const handleReplace = useCallback(async () => {
@@ -329,13 +482,13 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
         }
 
         // Jump to next match after replacing
-        handleFind("next");
+        await handleFind("next");
         return;
       }
     }
 
     // If current doesn't match, find the next one first
-    const found = handleFind("next");
+    const found = await handleFind("next");
     if (!found) {
       setStatusMessage("Không có mục nào để thay thế.");
       setStatusType("info");
@@ -350,7 +503,7 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
     handleFind,
   ]);
 
-  // Replace All in Current Chapter
+  // Replace All (Trong chương hoặc Toàn bộ sách)
   const handleReplaceAll = useCallback(async () => {
     if (!findWhat.trim()) {
       setStatusMessage("Vui lòng nhập từ khóa tìm kiếm.");
@@ -365,57 +518,127 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
       return;
     }
 
-    setIsProcessing(true);
-    setStatusMessage("Đang thực hiện thay thế tất cả...");
-    setStatusType("info");
+    if (searchScope === "current") {
+      setIsProcessing(true);
+      setStatusMessage("Đang thực hiện thay thế tất cả trong chương...");
+      setStatusType("info");
 
-    try {
-      const updates: Array<{ id: string; text: string }> = [];
-      let totalReplacedOccurrences = 0;
+      try {
+        const updates: Array<{ id: string; text: string }> = [];
+        let totalReplacedOccurrences = 0;
 
-      for (const s of sentences) {
-        regex.lastIndex = 0;
-        const matches = s.clean_text.match(regex);
-        if (matches && matches.length > 0) {
-          totalReplacedOccurrences += matches.length;
+        for (const s of sentences) {
           regex.lastIndex = 0;
-          const newText = s.clean_text.replace(regex, replaceWith);
-          updates.push({ id: s.id, text: newText });
+          const matches = s.clean_text.match(regex);
+          if (matches && matches.length > 0) {
+            totalReplacedOccurrences += matches.length;
+            regex.lastIndex = 0;
+            const newText = s.clean_text.replace(regex, replaceWith);
+            updates.push({ id: s.id, text: newText });
+          }
         }
-      }
 
-      if (updates.length === 0) {
-        setStatusMessage(`Không tìm thấy kết quả nào để thay thế: "${findWhat}"`);
-        setStatusType("info");
+        if (updates.length === 0) {
+          setStatusMessage(`Không tìm thấy kết quả nào để thay thế trong chương: "${findWhat}"`);
+          setStatusType("info");
+          setIsProcessing(false);
+          return;
+        }
+
+        // Batch update SQLite in Rust
+        await tauriBatchUpdateSentencesText(
+          updates.map((u) => ({ sentenceId: u.id, text: u.text }))
+        );
+
+        // Batch update Zustand store state
+        batchUpdateSentencesText(updates);
+
+        setStatusMessage(
+          `Thành công: Đã thay thế ${totalReplacedOccurrences} lần trong ${updates.length} câu của chương này!`
+        );
+        setStatusType("success");
+      } catch (err) {
+        console.error("Lỗi thay thế tất cả:", err);
+        setStatusMessage(`Lỗi thay thế: ${err instanceof Error ? err.message : String(err)}`);
+        setStatusType("error");
+      } finally {
         setIsProcessing(false);
-        return;
       }
+    } else {
+      // Thay thế trên toàn bộ các chương của sách
+      if (!activeProject) return;
 
-      // Batch update SQLite in Rust
-      await tauriBatchUpdateSentencesText(
-        updates.map((u) => ({ sentenceId: u.id, text: u.text }))
-      );
+      askConfirm({
+        title: "Xác Nhận Thay Thế Toàn Bộ Sách",
+        description: `Bạn có chắc muốn tìm và thay thế tất cả từ khóa "${findWhat}" thành "${replaceWith}" trên TOÀN BỘ CÁC CHƯƠNG của sách?\n\nThao tác này sẽ áp dụng trên tất cả các câu của toàn bộ dự án.`,
+        confirmText: "Thay Thế Toàn Sách",
+        isDestructive: true,
+        onConfirm: async () => {
+          setIsProcessing(true);
+          setStatusMessage("Đang thực hiện thay thế trên toàn bộ sách...");
+          setStatusType("info");
 
-      // Batch update Zustand store state
-      batchUpdateSentencesText(updates);
+          try {
+            const allSentences = await tauriGetAllProjectSentences(activeProject.id);
+            const updates: Array<{ id: string; text: string }> = [];
+            let totalReplacedOccurrences = 0;
+            const affectedChapterIds = new Set<string>();
 
-      setStatusMessage(
-        `Thành công: Đã thay thế ${totalReplacedOccurrences} lần trong ${updates.length} câu!`
-      );
-      setStatusType("success");
-    } catch (err) {
-      console.error("Lỗi thay thế tất cả:", err);
-      setStatusMessage(`Lỗi thay thế: ${err instanceof Error ? err.message : String(err)}`);
-      setStatusType("error");
-    } finally {
-      setIsProcessing(false);
+            for (const s of allSentences) {
+              regex.lastIndex = 0;
+              const matches = s.clean_text.match(regex);
+              if (matches && matches.length > 0) {
+                totalReplacedOccurrences += matches.length;
+                regex.lastIndex = 0;
+                const newText = s.clean_text.replace(regex, replaceWith);
+                updates.push({ id: s.id, text: newText });
+                affectedChapterIds.add(s.chapter_id);
+              }
+            }
+
+            if (updates.length === 0) {
+              setStatusMessage(`Không tìm thấy kết quả nào để thay thế trên toàn bộ sách: "${findWhat}"`);
+              setStatusType("info");
+              setIsProcessing(false);
+              return;
+            }
+
+            // Ghi hàng loạt vào SQLite
+            await tauriBatchUpdateSentencesText(
+              updates.map((u) => ({ sentenceId: u.id, text: u.text }))
+            );
+
+            // Cập nhật lại câu cho chương hiện tại đang mở
+            if (activeChapter) {
+              const refreshed = await tauriGetSentences(activeChapter.id);
+              setSentences(refreshed);
+            }
+
+            setStatusMessage(
+              `Thành công: Đã thay thế ${totalReplacedOccurrences} lần trong ${updates.length} câu thuộc ${affectedChapterIds.size} chương trên toàn bộ sách!`
+            );
+            setStatusType("success");
+          } catch (err) {
+            console.error("Lỗi thay thế toàn bộ sách:", err);
+            setStatusMessage(`Lỗi thay thế toàn sách: ${err instanceof Error ? err.message : String(err)}`);
+            setStatusType("error");
+          } finally {
+            setIsProcessing(false);
+          }
+        },
+      });
     }
   }, [
     findWhat,
     replaceWith,
     getMatcher,
+    searchScope,
     sentences,
+    activeChapter,
+    activeProject,
+    askConfirm,
     batchUpdateSentencesText,
+    setSentences,
   ]);
 
   // Keyboard shortcut handlers inside dialog
@@ -593,6 +816,37 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
               </label>
             </div>
 
+            {/* Search Scope Group */}
+            <div className="pt-2 border-t border-zinc-800/80">
+              <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">
+                Phạm vi (Scope)
+              </span>
+              <div className="flex gap-4">
+                <label className="flex items-center gap-1.5 cursor-pointer text-zinc-300 hover:text-white">
+                  <input
+                    type="radio"
+                    name="searchScope"
+                    value="current"
+                    checked={searchScope === "current"}
+                    onChange={() => setSearchScope("current")}
+                    className="text-indigo-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                  />
+                  <span className="text-[11px]">Chương hiện tại</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer text-zinc-300 hover:text-white">
+                  <input
+                    type="radio"
+                    name="searchScope"
+                    value="all"
+                    checked={searchScope === "all"}
+                    onChange={() => setSearchScope("all")}
+                    className="text-indigo-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                  />
+                  <span className="text-[11px]">Toàn bộ các chương (Toàn sách)</span>
+                </label>
+              </div>
+            </div>
+
             {/* Search Mode Group */}
             <div className="pt-2 border-t border-zinc-800/80">
               <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">
@@ -670,9 +924,17 @@ export const FindReplaceModal: React.FC<FindReplaceModalProps> = ({
                   onClick={handleReplaceAll}
                   disabled={isProcessing}
                   className="w-full py-1.5 px-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs transition-colors flex items-center justify-center gap-1 cursor-pointer shadow-md shadow-rose-600/20 disabled:opacity-50"
-                  title="Thay thế toàn bộ trong chương này"
+                  title={
+                    searchScope === "all"
+                      ? "Thay thế toàn bộ trong tất cả các chương của sách"
+                      : "Thay thế toàn bộ trong chương này"
+                  }
                 >
-                  <span>Thay thế tất cả</span>
+                  <span>
+                    {searchScope === "all"
+                      ? "Thay thế toàn sách"
+                      : "Thay thế tất cả"}
+                  </span>
                 </button>
               </>
             )}

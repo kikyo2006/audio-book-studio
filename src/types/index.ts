@@ -49,6 +49,7 @@ export interface ChapterItem {
   sentences?: SentenceItem[];
   bgm_path?: string | null;
   bgm_volume?: number | null;
+  is_enabled?: boolean;
 }
 
 export interface ProjectMetadata {
@@ -100,12 +101,21 @@ export interface TtsProgressPayload {
   error?: string;
 }
 
+export type ExportScope = 'chapter' | 'all_merged' | 'all_batch';
+
+export interface BatchExportResult {
+  exported_count: number;
+  total_chapters: number;
+  output_dir: string;
+}
+
 export interface AudioExportConfig {
   project_id: string;
   chapter_id?: string; // If undefined, export entire book
   format: 'wav' | 'mp3' | 'm4b';
   sentence_pause_ms: number;
   paragraph_pause_ms: number;
+  chapter_pause_ms?: number;
   output_path: string;
   bitrate?: number; // e.g. 320 for MP3
   include_metadata: boolean;
@@ -157,6 +167,11 @@ export interface CastingPreset {
   characters: PresetCharacter[];
   created_at: string;
   updated_at: string;
+}
+
+export interface MergeChaptersResult {
+  chapters: ChapterItem[];
+  merged_chapter_id: string;
 }
 
 

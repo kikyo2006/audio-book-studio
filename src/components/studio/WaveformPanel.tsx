@@ -1181,29 +1181,35 @@ export const WaveformPanel: React.FC = () => {
 
           {/* Right: Voice Waveform Canvas with Top Left Time Counter */}
           <div className="flex-1 px-3 py-1 relative flex flex-col justify-center bg-zinc-950 cursor-text overflow-hidden">
-            {/* Top Left Time Counter Badge (Moved to top-left as requested) */}
-            <div
-              style={{
-                position: "absolute",
-                top: 6,
-                left: 17,
-                zIndex: 10,
-                pointerEvents: "none",
-              }}
-            >
-              <span className="font-mono text-[10px] text-zinc-300 bg-zinc-900/90 px-2.5 py-0.5 rounded-full border border-zinc-800 shadow-sm flex items-center gap-1.5 backdrop-blur-sm">
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    isPlaying ? "bg-indigo-400 animate-pulse" : "bg-zinc-600"
-                  }`}
-                />
-                <span>{formatDuration(voiceCurrentTime)}</span>
-                <span className="text-zinc-600">/</span>
-                <span>{formatDuration(voiceTotalDuration)}</span>
-              </span>
-            </div>
+            {/* Top Left Time Counter Badge (Chỉ hiện khi câu đã có dữ liệu audio) */}
+            {Boolean(activeSentence?.audio_path) && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 6,
+                  left: 17,
+                  zIndex: 10,
+                  pointerEvents: "none",
+                }}
+              >
+                <span className="font-mono text-[10px] text-zinc-300 bg-zinc-900/90 px-2.5 py-0.5 rounded-full border border-zinc-800 shadow-sm flex items-center gap-1.5 backdrop-blur-sm">
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      isPlaying ? "bg-indigo-400 animate-pulse" : "bg-zinc-600"
+                    }`}
+                  />
+                  <span>{formatDuration(voiceCurrentTime)}</span>
+                  <span className="text-zinc-600">/</span>
+                  <span>{formatDuration(voiceTotalDuration)}</span>
+                </span>
+              </div>
+            )}
 
-            <div ref={voiceContainerRef} className="w-full" />
+            <div
+              ref={voiceContainerRef}
+              data-empty={!activeSentence?.audio_path}
+              className="w-full"
+            />
             {!activeSentence?.audio_path && (
               <div className="absolute inset-0 flex items-center justify-center text-xs text-zinc-600 pointer-events-none">
                 {activeSentence
@@ -1311,35 +1317,37 @@ export const WaveformPanel: React.FC = () => {
 
           {/* Right: BGM Waveform Canvas with Top Left Time Counter */}
           <div className="flex-1 px-3 py-1 relative flex flex-col justify-center bg-zinc-950 cursor-pointer overflow-hidden">
-            {/* Top Left Time Counter Badge (Moved to top-left as requested) */}
-            <div
-              style={{
-                position: "absolute",
-                top: 6,
-                left: 17,
-                zIndex: 10,
-                pointerEvents: "none",
-              }}
-            >
-              <span className="font-mono text-[10px] text-zinc-300 bg-zinc-900/90 px-2.5 py-0.5 rounded-full border border-zinc-800 shadow-sm flex items-center gap-1.5 backdrop-blur-sm">
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    isPlaying && activeChapter?.bgm_path
-                      ? "bg-emerald-400 animate-pulse"
-                      : "bg-zinc-600"
-                  }`}
-                />
-                <span>
-                  {activeChapter?.bgm_path && bgmTotalDuration > 0 ? formatDuration(bgmCurrentTime) : "00:00.0"}
+            {/* Top Left Time Counter Badge (Chỉ hiện khi chương đã có BGM hợp lệ) */}
+            {Boolean(activeChapter?.bgm_path && bgmTotalDuration > 0) && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 6,
+                  left: 17,
+                  zIndex: 10,
+                  pointerEvents: "none",
+                }}
+              >
+                <span className="font-mono text-[10px] text-zinc-300 bg-zinc-900/90 px-2.5 py-0.5 rounded-full border border-zinc-800 shadow-sm flex items-center gap-1.5 backdrop-blur-sm">
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      isPlaying && activeChapter?.bgm_path
+                        ? "bg-emerald-400 animate-pulse"
+                        : "bg-zinc-600"
+                    }`}
+                  />
+                  <span>{formatDuration(bgmCurrentTime)}</span>
+                  <span className="text-zinc-600">/</span>
+                  <span>{formatDuration(bgmTotalDuration)}</span>
                 </span>
-                <span className="text-zinc-600">/</span>
-                <span>
-                  {activeChapter?.bgm_path && bgmTotalDuration > 0 ? formatDuration(bgmTotalDuration) : "00:00.0"}
-                </span>
-              </span>
-            </div>
+              </div>
+            )}
 
-            <div ref={bgmContainerRef} className="w-full" />
+            <div
+              ref={bgmContainerRef}
+              data-empty={!activeChapter?.bgm_path}
+              className="w-full"
+            />
             {!activeChapter?.bgm_path && (
               <div className="absolute inset-0 flex items-center justify-center text-xs text-zinc-600">
                 <button

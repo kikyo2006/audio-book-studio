@@ -20,6 +20,14 @@ pub async fn export_chapter_audio(
     let db = db.inner().clone();
 
     tokio::task::spawn_blocking(move || {
+        // Kiểm tra nếu chương đang bị disable thì từ chối xuất
+        let chapter = db.get_chapter_by_id(&chapter_id)?;
+        if let Some(c) = chapter.as_ref() {
+            if !c.is_enabled {
+                return Err("Chương này đang bị vô hiệu hóa (disabled), không thể xuất file audio.".to_string());
+            }
+        }
+
         let sentences = db.get_sentences(&chapter_id)?;
         let mut audio_items: Vec<(PathBuf, f32)> = Vec::new();
 
@@ -66,6 +74,216 @@ pub async fn export_chapter_audio(
     })
     .await
     .map_err(|e| format!("Task export lỗi: {}", e))?
+}
+
+#[tauri::command]
+pub async fn export_book_audio(
+    project_id: String,
+    output_path: String,
+    sentence_pause_ms: u32,
+    paragraph_pause_ms: u32,
+    chapter_pause_ms: u32,
+    mix_bgm: Option<bool>,
+    bgm_volume: Option<f32>,
+    db: State<'_, Arc<Database>>,
+) -> Result<f64, String> {
+    let db = db.inner().clone();
+
+    tokio::task::spawn_blocking(move || {
+        let chapters = db.get_chapters(&project_id)?;
+        let enabled_chapters: Vec<_> = chapters.into_iter().filter(|c| c.is_enabled).collect();
+
+        if enabled_chapters.is_empty() {
+            return Err("Không có chương nào đang được kích hoạt (bật) để xuất.".to_string());
+        }
+
+        let temp_dir = std::env::temp_dir().join(format!("book_studio_export_{}", uuid::Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let mut chapter_wav_paths = Vec::new();
+
+        let opts = AudioConcatenateOptions {
+            sentence_pause_ms,
+            paragraph_pause_ms,
+            ..Default::default()
+        };
+
+        for (idx, chap) in enabled_chapters.iter().enumerate() {
+            let sentences = match db.get_sentences(&chap.id) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            let mut audio_items: Vec<(PathBuf, f32)> = Vec::new();
+            for s in sentences {
+                if let Some(path_str) = s.audio_path {
+                    let p = PathBuf::from(path_str);
+                    if p.exists() {
+                        let rate = s.speed.unwrap_or(1.0);
+                        audio_items.push((p, rate));
+                    }
+                }
+            }
+
+            if audio_items.is_empty() {
+                continue;
+            }
+
+            let temp_chap_file = temp_dir.join(format!("chap_{:04}.wav", idx));
+            let should_mix = mix_bgm.unwrap_or(false);
+
+            let res = if should_mix && chap.bgm_path.is_some() {
+                let bgm_opt = chap.bgm_path.as_ref().map(PathBuf::from);
+                let vol = bgm_volume.unwrap_or_else(|| {
+                    chap.bgm_volume.unwrap_or(0.2) as f32
+                });
+                crate::services::audio::concatenate_sentence_wavs_with_bgm(
+                    &audio_items,
+                    &temp_chap_file,
+                    &opts,
+                    bgm_opt.as_deref(),
+                    vol,
+                )
+            } else {
+                crate::services::audio::concatenate_sentence_wavs(
+                    &audio_items,
+                    &temp_chap_file,
+                    &opts,
+                )
+            };
+
+            if res.is_ok() {
+                chapter_wav_paths.push(temp_chap_file);
+            }
+        }
+
+        if chapter_wav_paths.is_empty() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Err("Không có chương nào có câu âm thanh hoàn chỉnh để xuất.".to_string());
+        }
+
+        let target = Path::new(&output_path);
+        let total_duration = crate::services::audio::concatenate_wav_files(
+            &chapter_wav_paths,
+            target,
+            chapter_pause_ms,
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        total_duration
+    })
+    .await
+    .map_err(|e| format!("Task export toàn bộ sách lỗi: {}", e))?
+}
+
+#[derive(serde::Serialize)]
+pub struct BatchExportResult {
+    pub exported_count: usize,
+    pub total_chapters: usize,
+    pub output_dir: String,
+}
+
+#[tauri::command]
+pub async fn export_batch_chapters(
+    project_id: String,
+    output_dir: String,
+    sentence_pause_ms: u32,
+    paragraph_pause_ms: u32,
+    mix_bgm: Option<bool>,
+    bgm_volume: Option<f32>,
+    db: State<'_, Arc<Database>>,
+) -> Result<BatchExportResult, String> {
+    let db = db.inner().clone();
+
+    tokio::task::spawn_blocking(move || {
+        let chapters = db.get_chapters(&project_id)?;
+        let enabled_chapters: Vec<_> = chapters.into_iter().filter(|c| c.is_enabled).collect();
+
+        if enabled_chapters.is_empty() {
+            return Err("Không có chương nào đang được kích hoạt (bật) để xuất.".to_string());
+        }
+
+        let out_dir = Path::new(&output_dir);
+        std::fs::create_dir_all(out_dir)
+            .map_err(|e| format!("Không tạo được thư mục xuất ({}): {}", output_dir, e))?;
+
+        let opts = AudioConcatenateOptions {
+            sentence_pause_ms,
+            paragraph_pause_ms,
+            ..Default::default()
+        };
+
+        let mut exported_count = 0usize;
+        let total_chapters = enabled_chapters.len();
+
+        for chap in &enabled_chapters {
+            let sentences = match db.get_sentences(&chap.id) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            let mut audio_items: Vec<(PathBuf, f32)> = Vec::new();
+            for s in sentences {
+                if let Some(path_str) = s.audio_path {
+                    let p = PathBuf::from(path_str);
+                    if p.exists() {
+                        let rate = s.speed.unwrap_or(1.0);
+                        audio_items.push((p, rate));
+                    }
+                }
+            }
+
+            if audio_items.is_empty() {
+                continue;
+            }
+
+            let clean_title = chap
+                .title
+                .trim()
+                .replace(&['/', '\\', ':', '*', '?', '"', '<', '>', '|'][..], "_");
+
+            let filename = format!("{:02} - {}.wav", chap.index, clean_title);
+            let target_file = out_dir.join(filename);
+
+            let should_mix = mix_bgm.unwrap_or(false);
+            let res = if should_mix && chap.bgm_path.is_some() {
+                let bgm_opt = chap.bgm_path.as_ref().map(PathBuf::from);
+                let vol = bgm_volume.unwrap_or_else(|| {
+                    chap.bgm_volume.unwrap_or(0.2) as f32
+                });
+                crate::services::audio::concatenate_sentence_wavs_with_bgm(
+                    &audio_items,
+                    &target_file,
+                    &opts,
+                    bgm_opt.as_deref(),
+                    vol,
+                )
+            } else {
+                crate::services::audio::concatenate_sentence_wavs(
+                    &audio_items,
+                    &target_file,
+                    &opts,
+                )
+            };
+
+            if res.is_ok() {
+                exported_count += 1;
+            }
+        }
+
+        if exported_count == 0 {
+            return Err("Không có chương nào có file âm thanh sẵn sàng để xuất.".to_string());
+        }
+
+        Ok(BatchExportResult {
+            exported_count,
+            total_chapters,
+            output_dir,
+        })
+    })
+    .await
+    .map_err(|e| format!("Task export hàng loạt lỗi: {}", e))?
 }
 
 #[tauri::command]

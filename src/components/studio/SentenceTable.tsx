@@ -12,8 +12,9 @@ import {
   Volume2,
   VolumeX,
   Layers,
-  Search,
   FilePlus,
+  Plus,
+  Sparkles,
 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useProjectStore } from "@/stores/useProjectStore";
@@ -28,16 +29,20 @@ import {
   tauriGetChapters,
   tauriGetSentences,
   tauriInsertBlankSentences,
+  tauriMoveSentence,
   tauriRegenerateSentence,
   tauriUpdateSentenceText,
   tauriUpdateSilenceDuration,
 } from "@/lib/tauri";
-import { formatDuration } from "@/lib/utils";
+import { formatDuration, MAX_SENTENCE_CHARS } from "@/lib/utils";
 import type { CharacterProfile, SentenceItem } from "@/types";
 import {
   SentenceContextMenu,
   type ContextMenuState,
 } from "./SentenceContextMenu";
+import { MoveSentenceModal } from "./MoveSentenceModal";
+import { InsertSfxModal } from "./InsertSfxModal";
+import type { SfxItem } from "@/data/sfxCatalog";
 
 interface SentenceRowProps {
   item: SentenceItem;
@@ -114,6 +119,8 @@ const SentenceRow = memo(function SentenceRow({
   onUpdateSilenceDuration,
 }: SentenceRowProps) {
   const isSilence = Boolean(item.clean_text?.startsWith("[Khoảng lặng"));
+  const isSfx = Boolean(item.clean_text?.startsWith("[Hiệu ứng:"));
+  const isTooLong = editText.trim().length > MAX_SENTENCE_CHARS;
   const [durationInput, setDurationInput] = useState<string>(
     item.duration ? String(item.duration) : "3.0"
   );
@@ -144,6 +151,12 @@ const SentenceRow = memo(function SentenceRow({
             : isSelected
             ? "bg-indigo-950/30 border-indigo-500/60 border-dashed"
             : "bg-zinc-950/40 hover:bg-zinc-900/60 border-zinc-800 border-dashed"
+          : isSfx
+          ? isPlayingThis
+            ? "bg-purple-950/60 border-purple-400 shadow-md shadow-purple-500/20 ring-1 ring-purple-400/50"
+            : isSelected
+            ? "bg-purple-950/40 border-purple-500/60"
+            : "bg-purple-950/15 hover:bg-purple-950/30 border-purple-500/30"
           : isPlayingThis
           ? "bg-indigo-950/40 border-indigo-500 shadow-md shadow-indigo-500/10 ring-1 ring-indigo-500/50"
           : isSelected
@@ -190,6 +203,19 @@ const SentenceRow = memo(function SentenceRow({
                   giây (s)
                 </span>
               </div>
+            </div>
+          ) : isSfx ? (
+            <div
+              className="flex items-center gap-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                <Sparkles className="w-3 h-3 text-purple-400" />
+                Hiệu ứng âm thanh (SFX)
+              </span>
+              <span className="text-[10px] font-mono text-purple-400 bg-zinc-950 border border-purple-500/20 px-1.5 py-0.5 rounded">
+                {item.duration ? `${item.duration.toFixed(1)}s` : "0.0s"}
+              </span>
             </div>
           ) : (
             /* Role / Character Selector */
@@ -291,7 +317,7 @@ const SentenceRow = memo(function SentenceRow({
             </span>
           )}
 
-          {item.status === "pending" && !isSilence && (
+          {item.status === "pending" && !isSilence && !isSfx && (
             <span className="text-[11px] text-zinc-500">Chưa tạo</span>
           )}
 
@@ -302,10 +328,12 @@ const SentenceRow = memo(function SentenceRow({
               onPlaySentence(item);
             }}
             disabled={item.status === "generating"}
-            className="p-1 rounded hover:bg-zinc-700 text-zinc-300 disabled:opacity-30 disabled:hover:bg-transparent"
+            className="p-1 rounded hover:bg-zinc-700 text-zinc-300 disabled:opacity-30 disabled:hover:bg-transparent cursor-pointer"
             title={
               isSilence
                 ? `Nghe thử khoảng lặng (${item.duration}s)`
+                : isSfx
+                ? `Nghe thử hiệu ứng âm thanh (${item.duration?.toFixed(1)}s)`
                 : item.status === "ready"
                 ? "Nghe câu này"
                 : "Tạo giọng và phát câu này (TTS)"
@@ -319,14 +347,14 @@ const SentenceRow = memo(function SentenceRow({
           </button>
 
           {/* Regenerate Button */}
-          {!isSilence && (
+          {!isSilence && !isSfx && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 onRegenerate(item);
               }}
               disabled={!isServerOnline || item.status === "generating"}
-              className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-indigo-400 disabled:opacity-30"
+              className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-indigo-400 disabled:opacity-30 cursor-pointer"
               title="Tái tạo âm thanh cho câu này (Ctrl+Enter)"
             >
               <RotateCcw className="w-3.5 h-3.5" />
@@ -335,7 +363,7 @@ const SentenceRow = memo(function SentenceRow({
         </div>
       </div>
 
-      {/* Sentence Body / Inline Editor / Silence Visualizer */}
+      {/* Sentence Body / Inline Editor / Silence Visualizer / SFX Visualizer */}
       {isSilence ? (
         <div
           className="flex items-center gap-2 py-1.5 px-3 rounded bg-zinc-950/60 border border-dashed border-zinc-800/90 text-zinc-500 text-xs font-mono select-none"
@@ -348,6 +376,25 @@ const SentenceRow = memo(function SentenceRow({
           </span>
           <div className="flex-1 border-t border-dashed border-zinc-800" />
         </div>
+      ) : isSfx ? (
+        <div
+          className="flex items-center gap-2.5 py-2 px-3 rounded-lg bg-purple-950/20 border border-purple-500/30 text-purple-200 text-xs select-none"
+          title="Nhấp chuột phải vào đây để chèn thêm hoặc xóa hiệu ứng"
+        >
+          <div className="w-6 h-6 rounded bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
+            <Sparkles className="w-3.5 h-3.5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="font-medium text-purple-100 truncate text-[13px]">
+              {item.clean_text.replace(/^\[Hiệu ứng:\s*/, "").replace(/\s*\([\d.]+s\)]$/, "")}
+            </div>
+            <div className="text-[11px] text-purple-400/80 font-mono flex items-center gap-2">
+              <span>Thời lượng phát: {item.duration ? `${item.duration.toFixed(2)}s` : "0.0s"}</span>
+              <span>•</span>
+              <span className="text-zinc-500">Đã tích hợp vào timeline toàn chương</span>
+            </div>
+          </div>
+        </div>
       ) : isEditing ? (
         <div
           className="flex flex-col gap-2 pt-1"
@@ -359,6 +406,7 @@ const SentenceRow = memo(function SentenceRow({
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
+                if (isTooLong) return;
                 onSaveEdit(item.id);
                 onRegenerate({ ...item, clean_text: editText });
               } else if (e.key === "Escape") {
@@ -366,10 +414,24 @@ const SentenceRow = memo(function SentenceRow({
               }
             }}
             rows={2}
-            className="w-full p-2 bg-zinc-950 border border-indigo-500 rounded text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans resize-none"
+            className={`w-full p-2 bg-zinc-950 border rounded text-sm text-zinc-100 focus:outline-none focus:ring-1 font-sans resize-none ${
+              isTooLong
+                ? "border-rose-500 focus:ring-rose-500"
+                : "border-indigo-500 focus:ring-indigo-500"
+            }`}
             autoFocus
           />
-          <div className="flex justify-end gap-2 text-xs">
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span
+              className={`font-mono text-[11px] ${
+                isTooLong ? "text-rose-400 font-semibold" : "text-zinc-500"
+              }`}
+              title={`Mỗi câu tối đa ${MAX_SENTENCE_CHARS} ký tự`}
+            >
+              {editText.length}/{MAX_SENTENCE_CHARS}
+              {isTooLong ? " - Câu quá dài, hãy tách thành nhiều câu" : ""}
+            </span>
+            <div className="flex gap-2">
             <button
               onClick={onCancelEdit}
               className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
@@ -378,10 +440,12 @@ const SentenceRow = memo(function SentenceRow({
             </button>
             <button
               onClick={() => onSaveEdit(item.id)}
-              className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium"
+              disabled={isTooLong}
+              className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-indigo-600"
             >
               Lưu thay đổi
             </button>
+            </div>
           </div>
         </div>
       ) : (
@@ -394,9 +458,16 @@ const SentenceRow = memo(function SentenceRow({
               ? "text-zinc-200"
               : "text-zinc-400"
           }`}
+          style={{ minHeight: 24 }}
           title="Nhấp đúp chuột để chỉnh sửa văn bản câu"
         >
-          {renderHighlightedText(item.clean_text || item.raw_text || "", searchQuery, matchCase)}
+          {(item.clean_text || item.raw_text || "").trim() ? (
+            renderHighlightedText(item.clean_text || item.raw_text || "", searchQuery, matchCase)
+          ) : (
+            <span className="italic text-zinc-600">
+              Câu trống - nhấp đúp để nhập nội dung...
+            </span>
+          )}
         </p>
       )}
     </div>
@@ -441,12 +512,32 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
     setIsServerOnline,
   } = useStudioSettingsStore();
 
-  const { searchQuery, matchCase, openFind, registerScrollCallback } =
+  const { searchQuery, matchCase, registerScrollCallback } =
     useFindReplaceStore();
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [moveModal, setMoveModal] = useState<{
+    isOpen: boolean;
+    sentence: SentenceItem | null;
+    mode: "before" | "after";
+  }>({
+    isOpen: false,
+    sentence: null,
+    mode: "before",
+  });
+  const [sfxModal, setSfxModal] = useState<{
+    isOpen: boolean;
+    sentence: SentenceItem | null;
+    sfxItem: SfxItem | null;
+    position: "above" | "below";
+  }>({
+    isOpen: false,
+    sentence: null,
+    sfxItem: null,
+    position: "below",
+  });
   const parentRef = useRef<HTMLDivElement | null>(null);
 
   const rowVirtualizer = useVirtualizer({
@@ -516,6 +607,7 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
   const handleSaveEdit = useCallback(
     async (sentenceId: string) => {
       if (!editText.trim()) return;
+      if (editText.trim().length > MAX_SENTENCE_CHARS) return;
       updateSentenceText(sentenceId, editText.trim());
       setEditingId(null);
       try {
@@ -818,21 +910,82 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
     [activeProject, activeChapter, updateSentenceAudio, updateSentenceText, setChapters]
   );
 
+  const handleMoveSentence = useCallback(
+    async (
+      sentence: SentenceItem,
+      mode: "up" | "down" | "before" | "after",
+      targetIdx?: number
+    ) => {
+      if (!activeChapter) return;
+      try {
+        const updated = await tauriMoveSentence({
+          chapterId: activeChapter.id,
+          sentenceId: sentence.id,
+          targetMode: mode,
+          targetIdx,
+        });
+        if (updated && updated.length > 0) {
+          setSentences(updated);
+          setSelectedSentenceId(sentence.id);
+        }
+      } catch (err) {
+        console.error("Lỗi di chuyển câu:", err);
+        alert(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [activeChapter, setSentences, setSelectedSentenceId]
+  );
+
+  const handleOpenMoveModal = useCallback(
+    (sentence: SentenceItem, mode: "before" | "after") => {
+      setMoveModal({
+        isOpen: true,
+        sentence,
+        mode,
+      });
+    },
+    []
+  );
+
+  const handleSelectSfx = useCallback(
+    (
+      sentence: SentenceItem,
+      sfxItem: SfxItem,
+      position: "above" | "below" = "below"
+    ) => {
+      setSfxModal({
+        isOpen: true,
+        sentence,
+        sfxItem,
+        position,
+      });
+    },
+    []
+  );
+
   const { askConfirm } = useConfirmStore();
 
   const handleDeleteSentence = useCallback(
     (sentence: SentenceItem) => {
       if (!activeChapter || !activeProject) return;
       const isSilence = Boolean(sentence.clean_text?.startsWith("[Khoảng lặng"));
-      const title = isSilence ? "Xác Nhận Xóa Khoảng Lặng" : "Xác Nhận Xóa Câu";
+      const isSfx = Boolean(sentence.clean_text?.startsWith("[Hiệu ứng:"));
+      const title = isSilence
+        ? "Xác Nhận Xóa Khoảng Lặng"
+        : isSfx
+        ? "Xác Nhận Xóa Hiệu Ứng"
+        : "Xác Nhận Xóa Câu";
       const desc = isSilence
         ? "Bạn có chắc chắn muốn xóa khoảng lặng này khỏi kịch bản?"
+        : isSfx
+        ? `Bạn có chắc muốn xóa hiệu ứng: "${sentence.clean_text}" khỏi kịch bản?`
         : `Bạn có chắc muốn xóa câu thoại: "${(sentence.clean_text || sentence.raw_text || "").slice(0, 60)}..."?`;
+      const confirmText = isSfx ? "Xóa Hiệu Ứng" : isSilence ? "Xóa Khoảng Lặng" : "Xóa Câu";
 
       askConfirm({
         title,
         description: desc,
-        confirmText: "Xóa Câu",
+        confirmText,
         isDestructive: true,
         onConfirm: async () => {
           try {
@@ -859,8 +1012,11 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
       className="flex-1 min-w-0 flex flex-col h-full bg-zinc-900/30 overflow-hidden relative"
     >
       {/* Chapter Title Bar (Clean, uncluttered, professional) */}
-      <div className="p-3 border-b border-zinc-800 bg-zinc-950/40 flex items-center justify-between select-none">
-        <div className="flex items-center gap-2.5">
+      <div
+        style={{ paddingLeft: 15 }}
+        className="py-2.5 pr-5 border-b border-zinc-800 bg-zinc-950/40 flex items-center justify-between select-none"
+      >
+        <div className="flex items-center gap-3">
           <h2 className="text-sm font-semibold text-zinc-100">
             {activeChapter ? activeChapter.title : "Chưa chọn chương"}
           </h2>
@@ -875,22 +1031,6 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
             </span>
           )}
         </div>
-
-        {/* Quick hint for shortcuts */}
-        <div className="text-[11px] text-zinc-500 flex items-center gap-2.5">
-          <button
-            type="button"
-            onClick={openFind}
-            className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
-            title="Tìm kiếm (Ctrl+F)"
-          >
-            <Search className="w-3.5 h-3.5" />
-          </button>
-          <span className="text-zinc-600">|</span>
-          <span className="text-[11px] text-zinc-500">
-            Nhấn <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">F1</kbd> xem phím tắt
-          </span>
-        </div>
       </div>
 
       {/* Script Virtual Table / List */}
@@ -900,11 +1040,61 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
         style={{ contain: "strict" }}
       >
         {sentences.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center p-8 text-zinc-500">
-            <p className="text-sm">Không có dữ liệu câu trong chương này.</p>
-            <p className="text-xs mt-1 text-zinc-600">
-              Hãy chọn một chương từ mục lục bên trái.
+          <div className="h-full flex flex-col items-center justify-center text-center p-8 text-zinc-500 select-none">
+            <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-3 text-zinc-400 shadow-sm">
+              <FilePlus className="w-6 h-6 text-indigo-400" />
+            </div>
+            <p className="text-sm font-semibold text-zinc-200">
+              {activeChapter
+                ? `Chương "${activeChapter.title?.trim() || `Chương ${activeChapter.index}`}" đang rỗng`
+                : "Chưa có dữ liệu câu"}
             </p>
+            <p className="text-xs mt-1 text-zinc-500 max-w-sm">
+              Chương này hiện chưa có dòng thoại nào. Bạn có thể thêm câu mới để tự do nhập kịch bản hoặc lời thoại tùy ý.
+            </p>
+            {activeChapter && (
+              <div className="flex items-center gap-2 mt-5">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await tauriInsertBlankSentences({
+                        chapterId: activeChapter.id,
+                        position: "before",
+                        targetIndex: 1,
+                        count: 1,
+                      });
+                      const refreshed = await tauriGetSentences(activeChapter.id);
+                      setSentences(refreshed);
+                      if (refreshed.length > 0) {
+                        setSelectedSentenceId(refreshed[0].id);
+                        handleStartEdit(refreshed[0]);
+                      }
+                      if (activeProject) {
+                        const refreshedChaps = await tauriGetChapters(activeProject.id);
+                        setChapters(refreshedChaps);
+                      }
+                    } catch (err) {
+                      console.error("Lỗi thêm câu trống đầu tiên:", err);
+                    }
+                  }}
+                  className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium flex items-center gap-1.5 transition-colors shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Thêm câu thoại đầu tiên</span>
+                </button>
+                {onOpenInsertModal && (
+                  <button
+                    type="button"
+                    onClick={onOpenInsertModal}
+                    className="px-3 py-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 border border-zinc-700/60 text-zinc-300 text-xs font-medium flex items-center gap-1.5 transition-colors"
+                  >
+                    <FilePlus className="w-3.5 h-3.5" />
+                    <span>Chèn đoạn văn bản...</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div
@@ -968,12 +1158,16 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
       <SentenceContextMenu
         menu={contextMenu}
         characters={characters}
+        totalSentences={sentences.length}
         onClose={() => setContextMenu(null)}
         onAddSilence={handleAddSilence}
+        onSelectSfx={handleSelectSfx}
         onInsertBlank={handleInsertBlank}
         onOpenInsertModal={() => {
           if (onOpenInsertModal) onOpenInsertModal();
         }}
+        onMoveSentence={handleMoveSentence}
+        onOpenMoveModal={handleOpenMoveModal}
         onPlaySentence={handlePlaySentence}
         onRegenerate={handleRegenerate}
         onStartEdit={handleStartEdit}
@@ -982,6 +1176,32 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
           if (onOpenSplitChapter) onOpenSplitChapter();
         }}
         onDeleteSentence={handleDeleteSentence}
+      />
+
+      {/* Modal Chuyển Câu đến trước/sau dòng */}
+      <MoveSentenceModal
+        isOpen={moveModal.isOpen}
+        onClose={() => setMoveModal((prev) => ({ ...prev, isOpen: false }))}
+        sentence={moveModal.sentence}
+        totalSentences={sentences.length}
+        mode={moveModal.mode}
+        onConfirm={(targetLine) => {
+          if (moveModal.sentence) {
+            handleMoveSentence(moveModal.sentence, moveModal.mode, targetLine);
+          }
+        }}
+      />
+
+      {/* Modal Chèn Hiệu Ứng Âm Thanh (SFX) */}
+      <InsertSfxModal
+        isOpen={sfxModal.isOpen}
+        onClose={() => setSfxModal((prev) => ({ ...prev, isOpen: false }))}
+        targetSentence={sfxModal.sentence}
+        initialSfx={sfxModal.sfxItem}
+        initialPosition={sfxModal.position}
+        onInserted={(newSentence) => {
+          setSelectedSentenceId(newSentence.id);
+        }}
       />
     </div>
   );

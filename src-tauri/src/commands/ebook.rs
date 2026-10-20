@@ -69,6 +69,7 @@ pub async fn import_ebook_to_project(
                 total_duration: 0.0,
                 bgm_path: None,
                 bgm_volume: Some(0.2),
+                is_enabled: true,
             });
 
             all_sentences.extend(sentences);

@@ -1258,8 +1258,12 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
                   <button
                     onClick={handleAssignNarrationChapter}
                     disabled={isWorking || narrationSentences.length === 0}
-                    className="w-full py-1.5 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-40"
-                    title="Gán giọng này cho toàn bộ câu Dẫn Truyện trong chương đang mở"
+                    className="w-full py-1.5 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-medium text-xs transition-all flex items-center justify-center gap-1.5 shadow-sm hover:shadow-md hover:shadow-indigo-500/25 hover:brightness-110 active:scale-[0.99] cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100 disabled:hover:bg-indigo-600"
+                    title={
+                      narrationSentences.length === 0
+                        ? "Chương hiện tại không có câu dẫn truyện nào để gán"
+                        : `Gán giọng này cho toàn bộ ${narrationSentences.length} câu Dẫn Truyện trong chương`
+                    }
                   >
                     <UserCheck className="w-3.5 h-3.5" />
                     <span>Gán Dẫn Truyện (Chương này)</span>
@@ -1268,7 +1272,7 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
                   <button
                     onClick={handleAssignNarrationProject}
                     disabled={isWorking}
-                    className="w-full py-1 px-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white border border-zinc-700 text-[11px] transition-colors flex items-center justify-center gap-1.5"
+                    className="w-full py-1 px-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white border border-zinc-700 hover:border-indigo-500/50 text-[11px] transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-zinc-800"
                     title="Áp dụng giọng Dẫn Truyện này cho toàn bộ tất cả các chương trong cuốn sách"
                   >
                     <Globe className="w-3 h-3 text-indigo-400" />
@@ -1357,8 +1361,12 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
                   <button
                     onClick={() => handleAssignDialogue(false)}
                     disabled={isWorking || dialogueSentences.length === 0}
-                    className="w-full py-1.5 px-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-40"
-                    title="Gán giọng này cho toàn bộ câu thoại trong chương"
+                    className="w-full py-1.5 px-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white font-medium text-xs transition-all flex items-center justify-center gap-1.5 shadow-sm hover:shadow-md hover:shadow-purple-500/25 hover:brightness-110 active:scale-[0.99] cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100 disabled:hover:bg-purple-600"
+                    title={
+                      dialogueSentences.length === 0
+                        ? "Chương hiện tại không có câu hội thoại nào (0 câu)"
+                        : `Gán giọng này cho toàn bộ ${dialogueSentences.length} câu Hội Thoại trong chương`
+                    }
                   >
                     <UserCheck className="w-3.5 h-3.5" />
                     <span>Gán tất cả câu Hội Thoại</span>
@@ -1367,8 +1375,12 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
                   <button
                     onClick={() => handleAssignDialogue(true)}
                     disabled={isWorking || dialogueSentences.length === 0}
-                    className="w-full py-1 px-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white border border-zinc-700 text-[11px] transition-colors flex items-center justify-center gap-1.5"
-                    title="Chỉ gán cho những câu thoại chưa được chỉ định vai nhân vật cụ thể nào"
+                    className="w-full py-1 px-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white border border-zinc-700 hover:border-purple-500/50 text-[11px] transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-zinc-800"
+                    title={
+                      dialogueSentences.length === 0
+                        ? "Chương hiện tại không có câu hội thoại nào (0 câu)"
+                        : "Chỉ gán cho những câu thoại chưa được chỉ định vai nhân vật cụ thể nào"
+                    }
                   >
                     <Filter className="w-3 h-3 text-purple-400" />
                     <span>Chỉ gán câu thoại chưa có vai</span>
@@ -1515,14 +1527,14 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
                 <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
                   <button
                     onClick={() => setIsCreating(false)}
-                    className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                    className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 cursor-pointer"
                   >
                     Huỷ
                   </button>
                   <button
                     onClick={handleCreateCharacter}
                     disabled={!name.trim()}
-                    className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium disabled:opacity-40"
+                    className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Lưu Nhân Vật
                   </button>
@@ -1569,7 +1581,7 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => handleOpenBatchForChar(char)}
-                        className="px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 font-medium text-xs flex items-center gap-1.5 transition-all shadow-sm"
+                        className="px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 font-medium text-xs flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
                         title="Mở bảng phân vai hàng loạt theo phân cảnh cho nhân vật này"
                       >
                         <Layers className="w-3.5 h-3.5" />
@@ -1578,7 +1590,7 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({
 
                       <button
                         onClick={() => handleDeleteCharacter(char.id)}
-                        className="p-1.5 rounded-lg hover:bg-rose-950/40 text-zinc-500 hover:text-rose-400 transition-colors"
+                        className="p-1.5 rounded-lg hover:bg-rose-950/40 text-zinc-500 hover:text-rose-400 transition-colors cursor-pointer"
                         title="Xoá nhân vật"
                       >
                         <Trash2 className="w-3.5 h-3.5" />

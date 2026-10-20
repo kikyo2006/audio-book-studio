@@ -61,3 +61,8 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #3f3f46;
 }
+
+/* Hide the WaveSurfer playhead cursor on tracks that have no audio loaded */
+[data-empty="true"] > div::part(cursor) {
+  display: none;
+}

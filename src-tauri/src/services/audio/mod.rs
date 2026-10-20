@@ -430,3 +430,164 @@ pub fn generate_silence_wav(output_path: &Path, duration_secs: f64) -> Result<()
     Ok(())
 }
 
+/// Nối nhiều file WAV độc lập thành 1 file WAV duy nhất, với khoảng lặng `pause_ms` giữa các file
+pub fn concatenate_wav_files(
+    wav_paths: &[PathBuf],
+    output_path: &Path,
+    pause_ms: u32,
+) -> Result<f64, String> {
+    if wav_paths.is_empty() {
+        return Err("Không có file âm thanh nào để ghép nối.".to_string());
+    }
+
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Không tạo được thư mục xuất: {}", e))?;
+    }
+
+    // Xác định spec từ file hợp lệ đầu tiên
+    let first_valid = wav_paths
+        .iter()
+        .find(|p| p.exists())
+        .ok_or_else(|| "Không tìm thấy file âm thanh nào tồn tại trên đĩa.".to_string())?;
+
+    let first_reader = WavReader::open(first_valid)
+        .map_err(|e| format!("Không đọc được file WAV đầu tiên ({}): {}", first_valid.display(), e))?;
+    let target_spec = first_reader.spec();
+
+    let pause_samples =
+        (target_spec.sample_rate as f32 * (pause_ms as f32 / 1000.0)) as usize;
+
+    let mut writer = WavWriter::create(output_path, target_spec)
+        .map_err(|e| format!("Không tạo được file WAV đích: {}", e))?;
+
+    let mut total_samples_written = 0usize;
+
+    for (idx, path) in wav_paths.iter().enumerate() {
+        if !path.exists() {
+            continue;
+        }
+
+        let mut reader = match WavReader::open(path) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        match target_spec.sample_format {
+            SampleFormat::Int => {
+                for sample in reader.samples::<i16>() {
+                    if let Ok(s) = sample {
+                        writer.write_sample(s).map_err(|e| e.to_string())?;
+                        total_samples_written += 1;
+                    }
+                }
+            }
+            SampleFormat::Float => {
+                for sample in reader.samples::<f32>() {
+                    if let Ok(s) = sample {
+                        let clamped = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+                        writer.write_sample(clamped).map_err(|e| e.to_string())?;
+                        total_samples_written += 1;
+                    }
+                }
+            }
+        }
+
+        // Chèn khoảng lặng giữa các file WAV (trừ file cuối)
+        if idx + 1 < wav_paths.len() {
+            for _ in 0..pause_samples {
+                writer.write_sample(0i16).map_err(|e| e.to_string())?;
+                total_samples_written += 1;
+            }
+        }
+    }
+
+    writer.finalize().map_err(|e| format!("Lỗi hoàn tất file WAV: {}", e))?;
+
+    let duration_seconds = total_samples_written as f64
+        / (target_spec.sample_rate as f64 * target_spec.channels.max(1) as f64);
+    Ok(duration_seconds)
+}
+
+/// Cắt một đoạn âm thanh SFX (từ start_secs với thời lượng duration_secs),
+/// resample về 24,000Hz PCM 16-bit Mono, thêm micro fade chống click và xuất ra file WAV.
+pub fn trim_and_export_sfx_wav(
+    source_path: &Path,
+    output_path: &Path,
+    start_secs: f64,
+    duration_secs: f64,
+) -> Result<f64, String> {
+    if let Some(parent) = output_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    if !source_path.exists() {
+        return Err(format!("Không tìm thấy file SFX gốc: {}", source_path.display()));
+    }
+
+    let (samples, sr) = decode_audio_file(source_path)?;
+    if samples.is_empty() {
+        return Err("File SFX không chứa dữ liệu âm thanh hợp lệ.".to_string());
+    }
+
+    let total_src_samples = samples.len();
+    let start_frame = ((start_secs.max(0.0)) * sr as f64).round() as usize;
+    if start_frame >= total_src_samples {
+        return Err(format!(
+            "Thời điểm bắt đầu ({:.2}s) vượt quá độ dài file audio ({:.2}s).",
+            start_secs,
+            total_src_samples as f64 / sr as f64
+        ));
+    }
+
+    let end_frame = if duration_secs > 0.0 {
+        (start_frame + (duration_secs * sr as f64).round() as usize).min(total_src_samples)
+    } else {
+        total_src_samples
+    };
+
+    let sliced = &samples[start_frame..end_frame];
+    if sliced.is_empty() {
+        return Err("Đoạn âm thanh cắt bị rỗng.".to_string());
+    }
+
+    // Chuẩn hóa Sample Rate về 24,000Hz (chuẩn TTS của BookStudio)
+    let target_sr = 24000u32;
+    let mut resampled = resample_linear(sliced, sr, target_sr);
+
+    // Áp dụng Micro Fade-in & Fade-out 5ms để triệt tiêu tiếng "pop/click"
+    let fade_samples = ((target_sr as f32) * 0.005).round() as usize;
+    let fade_len = fade_samples.min(resampled.len() / 2);
+    if fade_len > 0 {
+        for i in 0..fade_len {
+            let factor = i as f32 / fade_len as f32;
+            resampled[i] *= factor;
+            let end_idx = resampled.len() - 1 - i;
+            resampled[end_idx] *= factor;
+        }
+    }
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: target_sr,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut writer = hound::WavWriter::create(output_path, spec)
+        .map_err(|e| format!("Lỗi tạo file WAV SFX: {}", e))?;
+
+    for &s in &resampled {
+        let clamped = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        writer.write_sample(clamped).map_err(|e| e.to_string())?;
+    }
+
+    writer
+        .finalize()
+        .map_err(|e| format!("Lỗi hoàn tất ghi file WAV SFX: {}", e))?;
+
+    let actual_duration = resampled.len() as f64 / target_sr as f64;
+    Ok(actual_duration)
+}
+
+

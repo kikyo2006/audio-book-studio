@@ -27,3 +27,6 @@ export function formatTimeHours(seconds: number): string {
   }
   return `${secs}s`;
 }
+
+/** Max characters per sentence (matches the 350-char split limit in the Rust tokenizer) */
+export const MAX_SENTENCE_CHARS = 350;

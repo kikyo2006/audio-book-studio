@@ -42,6 +42,7 @@ interface ProjectState {
   assignSpeakerToSentence: (sentenceId: string, char: CharacterProfile) => void;
   batchAssignDialoguesToSpeaker: (char: CharacterProfile) => void;
   updateChapterBgm: (chapterId: string, bgmPath: string | null, bgmVolume?: number) => void;
+  toggleChapterEnabled: (chapterId: string, isEnabled: boolean) => void;
   removeProject: (projectId: string) => void;
   updateProjectCover: (projectId: string, coverBase64: string) => void;
   updateProjectStatus: (projectId: string, status: string) => void;
@@ -62,7 +63,36 @@ export const useProjectStore = create<ProjectState>((set) => ({
 
   setProjects: (projects) => set({ projects }),
   setActiveProject: (activeProject) => set({ activeProject }),
-  setChapters: (chapters) => set({ chapters }),
+  setChapters: (chapters) =>
+    set((state) => {
+      const enabledChapters = chapters.filter((c) => c.is_enabled !== false);
+      const totalSentences = enabledChapters.reduce(
+        (sum, c) => sum + (c.sentence_count || 0),
+        0
+      );
+      const completedSentences = enabledChapters.reduce(
+        (sum, c) => sum + (c.ready_sentence_count || 0),
+        0
+      );
+      const totalDuration = enabledChapters.reduce(
+        (sum, c) => sum + (c.total_duration || 0),
+        0
+      );
+      const nextActiveProject = state.activeProject
+        ? {
+            ...state.activeProject,
+            chapter_count: chapters.length,
+            total_sentences: totalSentences,
+            completed_sentences: completedSentences,
+            total_duration: totalDuration,
+          }
+        : null;
+
+      return {
+        chapters,
+        activeProject: nextActiveProject,
+      };
+    }),
   setActiveChapter: (activeChapter) => set({ activeChapter }),
   setSentences: (sentences) => set({ sentences }),
   setCharacters: (characters) => set({ characters }),
@@ -254,6 +284,46 @@ export const useProjectStore = create<ProjectState>((set) => ({
       return {
         chapters: updatedChapters,
         activeChapter: updatedActiveChapter,
+      };
+    }),
+
+  toggleChapterEnabled: (chapterId, isEnabled) =>
+    set((state) => {
+      const nextChapters = state.chapters.map((c) =>
+        c.id === chapterId ? { ...c, is_enabled: isEnabled } : c
+      );
+      const nextActiveChapter =
+        state.activeChapter?.id === chapterId
+          ? { ...state.activeChapter, is_enabled: isEnabled }
+          : state.activeChapter;
+
+      const enabledChapters = nextChapters.filter((c) => c.is_enabled !== false);
+      const totalSentences = enabledChapters.reduce(
+        (sum, c) => sum + (c.sentence_count || 0),
+        0
+      );
+      const completedSentences = enabledChapters.reduce(
+        (sum, c) => sum + (c.ready_sentence_count || 0),
+        0
+      );
+      const totalDuration = enabledChapters.reduce(
+        (sum, c) => sum + (c.total_duration || 0),
+        0
+      );
+
+      const nextActiveProject = state.activeProject
+        ? {
+            ...state.activeProject,
+            total_sentences: totalSentences,
+            completed_sentences: completedSentences,
+            total_duration: totalDuration,
+          }
+        : null;
+
+      return {
+        chapters: nextChapters,
+        activeChapter: nextActiveChapter,
+        activeProject: nextActiveProject,
       };
     }),
 

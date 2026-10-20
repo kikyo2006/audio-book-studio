@@ -377,7 +377,9 @@ export default function Home() {
       >
         {activeProject ? (
           <>
-            <ChapterList />
+            <ChapterList
+              onOpenSplitChapter={() => setIsSplitChapterOpen(true)}
+            />
             <SentenceTable
               onOpenSplitChapter={() => setIsSplitChapterOpen(true)}
               onOpenInsertModal={() => setIsInsertParagraphOpen(true)}

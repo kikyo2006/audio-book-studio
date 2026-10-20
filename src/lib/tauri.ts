@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   CastingPreset,
   ChapterItem,
   EbookParsedData,
+  MergeChaptersResult,
   ProjectMetadata,
   SentenceItem,
   TtsSentenceResult,
@@ -107,6 +108,19 @@ export async function tauriGetSentences(chapterId: string): Promise<SentenceItem
   }
 }
 
+export async function tauriGetAllProjectSentences(
+  projectId: string
+): Promise<SentenceItem[]> {
+  try {
+    return await invoke<SentenceItem[]>("get_all_project_sentences", {
+      projectId,
+    });
+  } catch (err) {
+    console.warn("Lỗi tauriGetAllProjectSentences:", err);
+    return [];
+  }
+}
+
 export async function tauriUpdateSentenceText(
   sentenceId: string,
   text: string
@@ -194,6 +208,90 @@ export async function tauriExportChapterAudio(params: {
     mixBgm: params.mixBgm ?? false,
     bgmVolume: params.bgmVolume ?? null,
   });
+}
+
+export async function tauriExportBookAudio(params: {
+  projectId: string;
+  outputPath: string;
+  sentencePauseMs: number;
+  paragraphPauseMs: number;
+  chapterPauseMs: number;
+  mixBgm?: boolean;
+  bgmVolume?: number;
+}): Promise<number> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Xuất audio cần backend Tauri");
+  }
+  return await invoke<number>("export_book_audio", {
+    projectId: params.projectId,
+    outputPath: params.outputPath,
+    sentencePauseMs: params.sentencePauseMs,
+    paragraphPauseMs: params.paragraphPauseMs,
+    chapterPauseMs: params.chapterPauseMs,
+    mixBgm: params.mixBgm ?? false,
+    bgmVolume: params.bgmVolume ?? null,
+  });
+}
+
+export async function tauriExportBatchChapters(params: {
+  projectId: string;
+  outputDir: string;
+  sentencePauseMs: number;
+  paragraphPauseMs: number;
+  mixBgm?: boolean;
+  bgmVolume?: number;
+}): Promise<import("@/types").BatchExportResult> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Xuất hàng loạt audio cần backend Tauri");
+  }
+  return await invoke<import("@/types").BatchExportResult>("export_batch_chapters", {
+    projectId: params.projectId,
+    outputDir: params.outputDir,
+    sentencePauseMs: params.sentencePauseMs,
+    paragraphPauseMs: params.paragraphPauseMs,
+    mixBgm: params.mixBgm ?? false,
+    bgmVolume: params.bgmVolume ?? null,
+  });
+}
+
+export async function tauriSelectDirectory(): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Chọn thư mục xuất các file Audio chương",
+    });
+    if (typeof selected === "string") {
+      return selected;
+    }
+    return null;
+  } catch (err) {
+    console.error("Lỗi khi mở hộp thoại chọn thư mục:", err);
+    return null;
+  }
+}
+
+export async function tauriSelectSaveAudioFile(
+  defaultPath?: string
+): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const selected = await save({
+      defaultPath,
+      filters: [
+        {
+          name: "Audio WAV (*.wav)",
+          extensions: ["wav"],
+        },
+      ],
+      title: "Chọn vị trí và đặt tên file Audio",
+    });
+    return selected;
+  } catch (err) {
+    console.error("Lỗi khi mở hộp thoại lưu file:", err);
+    return null;
+  }
 }
 
 export async function tauriReadAudioBase64(filePath: string): Promise<string> {
@@ -349,6 +447,73 @@ export async function tauriReorderChapter(
   });
 }
 
+export async function tauriToggleChapterEnabled(
+  chapterId: string,
+  isEnabled: boolean
+): Promise<ChapterItem> {
+  if (!isTauriEnvironment()) {
+    return {
+      id: chapterId,
+      project_id: "",
+      index: 1,
+      title: "",
+      raw_content: "",
+      sentence_count: 0,
+      ready_sentence_count: 0,
+      total_duration: 0,
+      is_enabled: isEnabled,
+    };
+  }
+  return await invoke<ChapterItem>("toggle_chapter_enabled", {
+    chapterId,
+    isEnabled,
+  });
+}
+
+export async function tauriInsertEmptyChapter(params: {
+  projectId: string;
+  targetChapterId: string;
+  placeBefore: boolean;
+  title?: string;
+}): Promise<ChapterItem> {
+  if (!isTauriEnvironment()) {
+    return {
+      id: `chap-${Date.now()}`,
+      project_id: params.projectId,
+      index: 1,
+      title: params.title || "Chương mới",
+      raw_content: "",
+      sentence_count: 0,
+      ready_sentence_count: 0,
+      total_duration: 0,
+      is_enabled: true,
+    };
+  }
+  return await invoke<ChapterItem>("insert_empty_chapter", {
+    projectId: params.projectId,
+    targetChapterId: params.targetChapterId,
+    placeBefore: params.placeBefore,
+    title: params.title,
+  });
+}
+
+export async function tauriMergeChapters(params: {
+  projectId: string;
+  currentChapterId: string;
+  targetChapterId: string;
+  finalTitle: string;
+}): Promise<MergeChaptersResult> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Gộp chương chỉ khả dụng trên desktop app.");
+  }
+  return await invoke<MergeChaptersResult>("merge_chapters", {
+    projectId: params.projectId,
+    currentChapterId: params.currentChapterId,
+    targetChapterId: params.targetChapterId,
+    finalTitle: params.finalTitle,
+  });
+}
+
 export async function tauriAddSilenceSentence(params: {
   projectId: string;
   chapterId: string;
@@ -364,6 +529,31 @@ export async function tauriAddSilenceSentence(params: {
     chapterId: params.chapterId,
     targetSentenceId: params.targetSentenceId,
     position: params.position,
+    durationSecs: params.durationSecs,
+  });
+}
+
+export async function tauriInsertSfxSentence(params: {
+  projectId: string;
+  chapterId: string;
+  targetSentenceId: string;
+  position: "above" | "below";
+  sfxPath: string;
+  sfxName: string;
+  startSecs: number;
+  durationSecs: number;
+}): Promise<SentenceItem> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Chèn hiệu ứng âm thanh chỉ khả dụng trên desktop app.");
+  }
+  return await invoke<SentenceItem>("insert_sfx_sentence", {
+    projectId: params.projectId,
+    chapterId: params.chapterId,
+    targetSentenceId: params.targetSentenceId,
+    position: params.position,
+    sfxPath: params.sfxPath,
+    sfxName: params.sfxName,
+    startSecs: params.startSecs,
     durationSecs: params.durationSecs,
   });
 }
@@ -384,6 +574,21 @@ export async function tauriUpdateSilenceDuration(params: {
 export async function tauriDeleteSentence(sentenceId: string): Promise<void> {
   if (!isTauriEnvironment()) return;
   await invoke("delete_sentence", { sentenceId });
+}
+
+export async function tauriMoveSentence(params: {
+  chapterId: string;
+  sentenceId: string;
+  targetMode: "up" | "down" | "before" | "after";
+  targetIdx?: number;
+}): Promise<SentenceItem[]> {
+  if (!isTauriEnvironment()) return [];
+  return await invoke<SentenceItem[]>("move_sentence", {
+    chapterId: params.chapterId,
+    sentenceId: params.sentenceId,
+    targetMode: params.targetMode,
+    targetIdx: params.targetIdx ?? null,
+  });
 }
 
 export async function tauriInsertBlankSentences(params: {

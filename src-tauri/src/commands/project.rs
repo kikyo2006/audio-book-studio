@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
 use crate::db::Database;
-use crate::models::{Chapter, Project, Sentence};
-use crate::services::audio::generate_silence_wav;
+use crate::models::{Chapter, MergeChaptersResult, Project, Sentence};
+use crate::services::audio::{generate_silence_wav, trim_and_export_sfx_wav};
 use crate::services::tts::get_sentence_audio_cache_path;
 
 #[tauri::command]
@@ -33,6 +33,17 @@ pub async fn get_sentences(
 ) -> Result<Vec<Sentence>, String> {
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || db.get_sentences(&chapter_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_all_project_sentences(
+    project_id: String,
+    db: State<'_, Arc<Database>>,
+) -> Result<Vec<Sentence>, String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.get_all_project_sentences(&project_id))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -291,6 +302,60 @@ pub async fn reorder_chapter(
 }
 
 #[tauri::command]
+pub async fn toggle_chapter_enabled(
+    chapter_id: String,
+    is_enabled: bool,
+    db: State<'_, Arc<Database>>,
+) -> Result<Chapter, String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.set_chapter_enabled(&chapter_id, is_enabled))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn insert_empty_chapter(
+    project_id: String,
+    target_chapter_id: String,
+    place_before: bool,
+    title: Option<String>,
+    db: State<'_, Arc<Database>>,
+) -> Result<Chapter, String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        db.insert_empty_chapter(
+            &project_id,
+            &target_chapter_id,
+            place_before,
+            title.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn merge_chapters(
+    project_id: String,
+    current_chapter_id: String,
+    target_chapter_id: String,
+    final_title: String,
+    db: State<'_, Arc<Database>>,
+) -> Result<MergeChaptersResult, String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        db.merge_chapters(
+            &project_id,
+            &current_chapter_id,
+            &target_chapter_id,
+            &final_title,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn split_sentences_to_chapter(
     project_id: String,
     source_chapter_id: String,
@@ -350,6 +415,63 @@ pub async fn add_silence_sentence(
 }
 
 #[tauri::command]
+pub async fn insert_sfx_sentence(
+    project_id: String,
+    chapter_id: String,
+    target_sentence_id: String,
+    position: String,
+    sfx_path: String,
+    sfx_name: String,
+    start_secs: f64,
+    duration_secs: f64,
+    app_handle: AppHandle,
+    db: State<'_, Arc<Database>>,
+) -> Result<Sentence, String> {
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("./data"));
+
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        // Tìm đường dẫn file SFX thực tế
+        let clean_rel = sfx_path.trim_start_matches('/').trim_start_matches('\\');
+        let mut candidate_paths = vec![
+            PathBuf::from(&sfx_path),
+            PathBuf::from(clean_rel),
+            PathBuf::from("public").join(clean_rel),
+        ];
+        if let Ok(res_dir) = app_handle.path().resource_dir() {
+            candidate_paths.push(res_dir.join(clean_rel));
+            candidate_paths.push(res_dir.join("public").join(clean_rel));
+        }
+
+        let actual_source = candidate_paths
+            .into_iter()
+            .find(|p| p.exists())
+            .ok_or_else(|| format!("Không tìm thấy file SFX nguồn: {}", sfx_path))?;
+
+        let temp_id = uuid::Uuid::new_v4().to_string();
+        let audio_path = get_sentence_audio_cache_path(&app_dir, &project_id, &temp_id);
+
+        let actual_duration =
+            trim_and_export_sfx_wav(&actual_source, &audio_path, start_secs, duration_secs)?;
+        let audio_str = audio_path.to_string_lossy().to_string();
+
+        db.insert_sfx_sentence(
+            &chapter_id,
+            &target_sentence_id,
+            &position,
+            &sfx_name,
+            actual_duration,
+            &audio_str,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn update_silence_duration(
     project_id: String,
     sentence_id: String,
@@ -381,6 +503,22 @@ pub async fn delete_sentence(
     tokio::task::spawn_blocking(move || db.delete_sentence(&sentence_id))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn move_sentence(
+    chapter_id: String,
+    sentence_id: String,
+    target_mode: String,
+    target_idx: Option<i64>,
+    db: State<'_, Arc<Database>>,
+) -> Result<Vec<Sentence>, String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        db.move_sentence(&chapter_id, &sentence_id, &target_mode, target_idx)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
