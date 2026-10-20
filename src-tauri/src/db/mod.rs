@@ -2148,9 +2148,14 @@ impl Database {
 mod tests {
     use super::*;
 
+    // Test gỡ lỗi trên DB thật của máy dev (chạy migration lên DB đó) nên không chạy tự động / trên CI.
+    // Chạy tay: cargo test --lib test_load_real_db_projects -- --ignored --nocapture
     #[test]
+    #[ignore = "đọc DB thật trong %APPDATA%, chỉ chạy tay trên máy dev"]
     fn test_load_real_db_projects() {
-        let appdata = std::env::var("APPDATA").unwrap();
+        let Ok(appdata) = std::env::var("APPDATA") else {
+            return;
+        };
         let db_path = std::path::PathBuf::from(appdata)
             .join("com.bookstudio.app")
             .join("bookstudio.db");
