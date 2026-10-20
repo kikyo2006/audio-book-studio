@@ -55,28 +55,27 @@ export const ConfirmModal: React.FC = () => {
     >
       <div
         style={{ backgroundColor: "#18181b" }}
-        className="w-full max-w-sm rounded-2xl border border-zinc-700/80 shadow-2xl shadow-black/95 p-5 text-zinc-200 space-y-4 animate-in zoom-in-95 duration-150"
+        className="w-full max-w-md rounded-2xl border border-zinc-700/80 shadow-2xl shadow-black/95 overflow-hidden text-zinc-200 animate-in zoom-in-95 duration-150 flex flex-col"
       >
-        <div className="flex items-start gap-3.5">
-          <div
-            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
-              isDestructive
-                ? "bg-rose-500/10 border-rose-500/25 text-rose-400"
-                : "bg-indigo-500/10 border-indigo-500/25 text-indigo-400"
-            }`}
-          >
-            {isDestructive ? (
-              <Trash2 className="w-5 h-5" />
-            ) : (
-              <AlertTriangle className="w-5 h-5" />
-            )}
-          </div>
-
-          <div className="flex-1 min-w-0 pr-1">
-            <h3 className="font-semibold text-sm text-white">{title}</h3>
-            <p className="text-xs text-zinc-400 leading-relaxed mt-1 whitespace-pre-line">
-              {description}
-            </p>
+        {/* Header */}
+        <div className="p-4 border-b border-zinc-800/90 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div
+              className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border ${
+                isDestructive
+                  ? "bg-rose-500/15 border-rose-500/30 text-rose-400"
+                  : "bg-amber-500/15 border-amber-500/30 text-amber-400"
+              }`}
+            >
+              {isDestructive ? (
+                <Trash2 className="w-3.5 h-3.5" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5" />
+              )}
+            </div>
+            <h3 className="font-semibold text-sm text-zinc-100" style={{ marginLeft: 8 }}>
+              {title}
+            </h3>
           </div>
 
           <button
@@ -89,7 +88,13 @@ export const ConfirmModal: React.FC = () => {
           </button>
         </div>
 
-        <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-800/80">
+        {/* Body */}
+        <div className="p-5 text-xs text-zinc-300 leading-relaxed whitespace-pre-line">
+          {description}
+        </div>
+
+        {/* Footer */}
+        <div className="p-3.5 border-t border-zinc-800/90 bg-zinc-950/40 flex items-center justify-end gap-2">
           <button
             type="button"
             disabled={isLoading}
@@ -103,7 +108,7 @@ export const ConfirmModal: React.FC = () => {
             type="button"
             disabled={isLoading}
             onClick={handleConfirm}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-medium text-white shadow-lg transition-all flex items-center gap-1.5 disabled:opacity-40 ${
+            className={`px-4 py-1.5 rounded-lg text-xs font-medium text-white shadow-lg transition-all flex items-center gap-1.5 disabled:opacity-40 ${
               isDestructive
                 ? "bg-rose-600 hover:bg-rose-500 shadow-rose-600/30"
                 : "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/30"

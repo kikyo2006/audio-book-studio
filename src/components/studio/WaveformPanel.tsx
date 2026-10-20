@@ -529,24 +529,36 @@ export const WaveformPanel: React.FC = () => {
     if (!activeSentence || !voiceWsRef.current) return;
 
     if (activeSentence.status === "ready" && activeSentence.audio_path) {
+      const sentenceRate = activeSentence.speed && activeSentence.speed > 0 ? activeSentence.speed : 1.0;
+      setPlaybackRate(sentenceRate);
+
       tauriReadAudioBase64(activeSentence.audio_path)
         .then((base64Url) => {
           voiceWsRef.current?.empty();
           voiceWsRef.current?.load(base64Url);
-          if (playingSentenceId === activeSentence.id) {
-            voiceWsRef.current?.once("ready", () => {
-              try {
+
+          voiceWsRef.current?.once("ready", () => {
+            try {
+              voiceWsRef.current?.setPlaybackRate(sentenceRate, true);
+              if (playingSentenceId === activeSentence.id) {
                 voiceWsRef.current?.play();
-              } catch (e) {
-                console.warn("Lỗi tự động phát câu:", e);
               }
-            });
-          }
+            } catch (e) {
+              console.warn("Lỗi thiết lập speak rate / phát câu:", e);
+            }
+          });
         })
         .catch((err) => {
           console.error("Lỗi nạp audio vào Voice WaveSurfer:", err);
         });
     } else {
+      try {
+        if (voiceWsRef.current.isPlaying()) {
+          voiceWsRef.current.pause();
+        }
+      } catch {
+        // ignore
+      }
       voiceWsRef.current.empty();
       setVoiceCurrentTime(0);
       setVoiceTotalDuration(0);
@@ -558,6 +570,36 @@ export const WaveformPanel: React.FC = () => {
     activeSentence?.duration,
     activeSentence?.voice,
     (activeSentence as any)?.updated_at,
+  ]);
+
+  // Phát câu khi người dùng bấm nút Play từ danh sách câu và âm thanh đã sẵn sàng
+  useEffect(() => {
+    if (!voiceWsRef.current || !activeSentence || activeSentence.status !== "ready") return;
+    if (playingSentenceId === activeSentence.id && isPlaying) {
+      if (!voiceWsRef.current.isPlaying()) {
+        try {
+          const sentenceRate = activeSentence.speed && activeSentence.speed > 0 ? activeSentence.speed : 1.0;
+          setPlaybackRate(sentenceRate);
+          voiceWsRef.current.setPlaybackRate(sentenceRate, true);
+          voiceWsRef.current.play();
+          if (bgmWsRef.current && !isBgmMuted && activeChapter?.bgm_path) {
+            bgmWsRef.current.setVolume(bgmVolume);
+            bgmWsRef.current.play();
+          }
+        } catch (err) {
+          console.warn("Lỗi phát audio:", err);
+        }
+      }
+    }
+  }, [
+    playingSentenceId,
+    isPlaying,
+    activeSentence?.id,
+    activeSentence?.status,
+    activeSentence?.speed,
+    isBgmMuted,
+    activeChapter?.bgm_path,
+    bgmVolume,
   ]);
 
   // Load BGM audio whenever chapter bgm_path changes
@@ -1027,19 +1069,25 @@ export const WaveformPanel: React.FC = () => {
         <div className="flex items-center gap-3">
           {/* Rate */}
           <div className="flex items-center gap-1 text-xs text-zinc-400">
-            {[1.0, 1.25, 1.5].map((rate) => (
+            <span className="text-[10px] text-zinc-500 font-mono mr-0.5">Tốc độ:</span>
+            {[0.85, 0.9, 1.0, 1.15, 1.25].map((rate) => (
               <button
                 key={rate}
                 onClick={() => handleRateChange(rate)}
                 className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors ${
-                  playbackRate === rate
-                    ? "bg-zinc-700 text-white font-medium"
+                  Math.abs(playbackRate - rate) < 0.02
+                    ? "bg-indigo-600 text-white font-medium"
                     : "hover:bg-zinc-800 text-zinc-400"
                 }`}
               >
                 {rate}x
               </button>
             ))}
+            {![0.85, 0.9, 1.0, 1.15, 1.25].some((r) => Math.abs(playbackRate - r) < 0.02) && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-600 text-white font-medium">
+                {playbackRate.toFixed(2)}x
+              </span>
+            )}
           </div>
 
           <div className="h-4 w-px bg-zinc-800" />

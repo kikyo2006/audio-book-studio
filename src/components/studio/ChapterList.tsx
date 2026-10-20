@@ -170,7 +170,15 @@ export const ChapterList: React.FC = () => {
   };
 
   return (
-    <aside className="w-80 border-r border-zinc-800 bg-zinc-950/60 flex flex-col h-full select-none">
+    <aside
+      style={{
+        width: 320,
+        minWidth: 320,
+        maxWidth: 320,
+        flexShrink: 0,
+      }}
+      className="w-80 shrink-0 border-r border-zinc-800 bg-zinc-950/60 flex flex-col h-full select-none"
+    >
       {/* Sidebar Header */}
       <div className="p-3 border-b border-zinc-800/80 flex items-center justify-between">
         <div className="flex items-center gap-2">

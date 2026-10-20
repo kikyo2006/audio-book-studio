@@ -32,12 +32,29 @@ pub async fn synthesize_sentence(
 
     let audio_path = get_sentence_audio_cache_path(&app_dir, &project_id, &sentence_id);
 
+    // Xóa file âm thanh cũ nếu đang tồn tại để đảm bảo nạp file mới
+    if audio_path.exists() {
+        let _ = std::fs::remove_file(&audio_path);
+    }
+
+    // Reset thông tin audio cũ trong database
+    let db_clone_init = db.inner().clone();
+    let s_id_init = sentence_id.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        db_clone_init.clear_sentence_audio(&s_id_init)
+    })
+    .await;
+
+    // Luôn gửi speed = 1.0 qua TTS engine để model sinh ra giọng đọc gốc chuẩn nhất,
+    // không bị méo giọng / lệch cao độ (pitch shift) do thuật toán resample.
+    // Tốc độ `speed` người dùng chọn thực chất là Speak Rate (playback rate) sẽ được
+    // lưu vào database và áp dụng khi phát (WaveSurfer) cũng như khi ghép audio.
     let req = TtsSynthesizeRequest {
         model: "vieneu-v3-turbo".to_string(),
         voice: voice.clone(),
         input: text.clone(),
         response_format: "wav".to_string(),
-        speed,
+        speed: 1.0,
         temperature,
     };
 

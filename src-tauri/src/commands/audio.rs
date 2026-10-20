@@ -21,18 +21,19 @@ pub async fn export_chapter_audio(
 
     tokio::task::spawn_blocking(move || {
         let sentences = db.get_sentences(&chapter_id)?;
-        let mut audio_paths = Vec::new();
+        let mut audio_items: Vec<(PathBuf, f32)> = Vec::new();
 
         for s in sentences {
             if let Some(path_str) = s.audio_path {
                 let p = PathBuf::from(path_str);
                 if p.exists() {
-                    audio_paths.push(p);
+                    let rate = s.speed.unwrap_or(1.0);
+                    audio_items.push((p, rate));
                 }
             }
         }
 
-        if audio_paths.is_empty() {
+        if audio_items.is_empty() {
             return Err("Không có file âm thanh nào đã được tạo trong chương này".to_string());
         }
 
@@ -53,14 +54,14 @@ pub async fn export_chapter_audio(
             });
 
             crate::services::audio::concatenate_sentence_wavs_with_bgm(
-                &audio_paths,
+                &audio_items,
                 target,
                 &opts,
                 bgm_opt.as_deref(),
                 vol,
             )
         } else {
-            crate::services::audio::concatenate_sentence_wavs(&audio_paths, target, &opts)
+            crate::services::audio::concatenate_sentence_wavs(&audio_items, target, &opts)
         }
     })
     .await

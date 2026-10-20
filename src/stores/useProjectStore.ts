@@ -36,6 +36,7 @@ interface ProjectState {
 
   updateSentenceStatus: (id: string, status: SentenceStatus, error?: string) => void;
   updateSentenceAudio: (id: string, audioPath: string, duration: number, voice?: string) => void;
+  clearSentenceAudio: (id: string) => void;
   updateSentenceText: (id: string, text: string) => void;
   batchUpdateSentencesText: (updates: Array<{ id: string; text: string }>) => void;
   assignSpeakerToSentence: (sentenceId: string, char: CharacterProfile) => void;
@@ -99,6 +100,48 @@ export const useProjectStore = create<ProjectState>((set) => ({
               duration,
               voice: voice || s.voice,
               status: "ready" as const,
+              error_message: undefined,
+              updated_at: new Date().toISOString(),
+            }
+          : s
+      );
+      const readySentences = nextSentences.filter((s) => s.status === "ready");
+      const readyCount = readySentences.length;
+      const chapterDuration = readySentences.reduce((sum, s) => sum + (s.duration || 0), 0);
+
+      const nextChapters = state.chapters.map((c) =>
+        c.id === state.activeChapter?.id
+          ? { ...c, ready_sentence_count: readyCount, total_duration: chapterDuration }
+          : c
+      );
+      const nextActiveChapter = state.activeChapter
+        ? { ...state.activeChapter, ready_sentence_count: readyCount, total_duration: chapterDuration }
+        : null;
+
+      const nextActiveProject = state.activeProject
+        ? {
+            ...state.activeProject,
+            total_duration: nextChapters.reduce((sum, c) => sum + (c.total_duration || 0), 0),
+          }
+        : null;
+
+      return {
+        sentences: nextSentences,
+        chapters: nextChapters,
+        activeChapter: nextActiveChapter,
+        activeProject: nextActiveProject,
+      };
+    }),
+
+  clearSentenceAudio: (id) =>
+    set((state) => {
+      const nextSentences = state.sentences.map((s) =>
+        s.id === id
+          ? {
+              ...s,
+              audio_path: undefined,
+              duration: 0,
+              status: "generating" as const,
               error_message: undefined,
               updated_at: new Date().toISOString(),
             }

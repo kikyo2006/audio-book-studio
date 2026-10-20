@@ -470,6 +470,13 @@ export async function tauriUpdateProjectCover(
   await invoke("update_project_cover", { projectId, coverBase64 });
 }
 
+export async function tauriResetProjectCover(
+  projectId: string
+): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  return await invoke<string | null>("reset_project_cover", { projectId });
+}
+
 export async function tauriUpdateProjectStatus(
   projectId: string,
   status: "active" | "completed" | "dropped"

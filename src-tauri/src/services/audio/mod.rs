@@ -174,22 +174,109 @@ pub fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> 
     output
 }
 
+/// Thay đổi tốc độ phát (Speak Rate) của âm thanh PCM mono bằng thuật toán SOLA
+/// (Synchronized Overlap-Add) - giữ nguyên vẹn 100% cao độ (Pitch Preservation).
+/// - speed > 1.0: nói nhanh hơn (rút ngắn thời gian)
+/// - speed < 1.0: nói chậm hơn (kéo dài thời gian)
+pub fn time_stretch_sola(samples: &[i16], sample_rate: u32, speed: f32) -> Vec<i16> {
+    if samples.is_empty() || (speed - 1.0).abs() < 0.02 || speed <= 0.3 || speed >= 3.0 {
+        return samples.to_vec();
+    }
+
+    let win_size = ((sample_rate as f32 * 0.025).round() as usize).max(256);
+    let hop_out = win_size / 2;
+    let hop_in = ((hop_out as f32) * speed).round() as usize;
+    let search_range = win_size / 2;
+
+    if samples.len() < win_size + search_range + hop_in {
+        return samples.to_vec();
+    }
+
+    let estimated_out_len = ((samples.len() as f32) / speed).round() as usize + win_size;
+    let mut out: Vec<i16> = Vec::with_capacity(estimated_out_len);
+
+    let init_len = win_size.min(samples.len());
+    out.extend_from_slice(&samples[..init_len]);
+
+    let mut in_pos = hop_in;
+    let mut out_pos = hop_out;
+
+    while in_pos + win_size + search_range <= samples.len() {
+        let mut best_offset = 0usize;
+        let mut max_corr = i64::MIN;
+
+        let overlap_len = win_size - hop_out;
+        let out_overlap_start = out_pos;
+
+        if out_overlap_start + overlap_len > out.len() {
+            break;
+        }
+
+        let mut delta = 0;
+        while delta < search_range {
+            let candidate_in = in_pos + delta;
+            let mut corr: i64 = 0;
+            let mut j = 0;
+            while j < overlap_len {
+                let s_out = out[out_overlap_start + j] as i64;
+                let s_in = samples[candidate_in + j] as i64;
+                corr += s_out * s_in;
+                j += 2;
+            }
+
+            if corr > max_corr {
+                max_corr = corr;
+                best_offset = delta;
+            }
+            delta += 1;
+        }
+
+        let best_in = in_pos + best_offset;
+
+        // Hòa trộn tuyến tính (Linear Crossfade) trên vùng overlap
+        for j in 0..overlap_len {
+            let fade_in = (j as f32) / (overlap_len as f32);
+            let fade_out = 1.0 - fade_in;
+
+            let mixed = (out[out_overlap_start + j] as f32 * fade_out)
+                + (samples[best_in + j] as f32 * fade_in);
+            out[out_overlap_start + j] = mixed.clamp(-32768.0, 32767.0).round() as i16;
+        }
+
+        // Nối tiếp phần non-overlapping của frame mới
+        let non_overlap_start = best_in + overlap_len;
+        let non_overlap_len = win_size - overlap_len;
+        if non_overlap_start + non_overlap_len <= samples.len() {
+            out.extend_from_slice(&samples[non_overlap_start..non_overlap_start + non_overlap_len]);
+        }
+
+        in_pos += hop_in;
+        out_pos += hop_out;
+    }
+
+    if in_pos < samples.len() {
+        out.extend_from_slice(&samples[in_pos..]);
+    }
+
+    out
+}
+
 pub fn concatenate_sentence_wavs(
-    input_wav_paths: &[PathBuf],
+    input_wav_items: &[(PathBuf, f32)],
     output_path: &Path,
     options: &AudioConcatenateOptions,
 ) -> Result<f64, String> {
-    concatenate_sentence_wavs_with_bgm(input_wav_paths, output_path, options, None, 0.2)
+    concatenate_sentence_wavs_with_bgm(input_wav_items, output_path, options, None, 0.2)
 }
 
 pub fn concatenate_sentence_wavs_with_bgm(
-    input_wav_paths: &[PathBuf],
+    input_wav_items: &[(PathBuf, f32)],
     output_path: &Path,
     options: &AudioConcatenateOptions,
     bgm_path: Option<&Path>,
     bgm_volume: f32,
 ) -> Result<f64, String> {
-    if input_wav_paths.is_empty() {
+    if input_wav_items.is_empty() {
         return Err("Danh sách file âm thanh trống".to_string());
     }
 
@@ -199,8 +286,8 @@ pub fn concatenate_sentence_wavs_with_bgm(
     }
 
     // Xác định spec từ file đầu tiên hoặc dùng default spec
-    let _ = crate::services::tts::sanitize_wav_file(&input_wav_paths[0]);
-    let first_reader = WavReader::open(&input_wav_paths[0])
+    let _ = crate::services::tts::sanitize_wav_file(&input_wav_items[0].0);
+    let first_reader = WavReader::open(&input_wav_items[0].0)
         .map_err(|e| format!("Không đọc được file WAV đầu tiên: {}", e))?;
     let target_spec = first_reader.spec();
 
@@ -209,7 +296,7 @@ pub fn concatenate_sentence_wavs_with_bgm(
 
     let mut voice_samples: Vec<i16> = Vec::new();
 
-    for (idx, path) in input_wav_paths.iter().enumerate() {
+    for (idx, (path, speed)) in input_wav_items.iter().enumerate() {
         if !path.exists() {
             continue;
         }
@@ -221,11 +308,13 @@ pub fn concatenate_sentence_wavs_with_bgm(
             Err(_) => continue,
         };
 
+        let mut sentence_samples = Vec::new();
+
         match target_spec.sample_format {
             SampleFormat::Int => {
                 for sample in reader.samples::<i16>() {
                     if let Ok(s) = sample {
-                        voice_samples.push(s);
+                        sentence_samples.push(s);
                     }
                 }
             }
@@ -233,14 +322,24 @@ pub fn concatenate_sentence_wavs_with_bgm(
                 for sample in reader.samples::<f32>() {
                     if let Ok(s) = sample {
                         let clamped = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
-                        voice_samples.push(clamped);
+                        sentence_samples.push(clamped);
                     }
                 }
             }
         }
 
+        // Áp dụng Speak Rate (SOLA time-stretch) cho từng câu thoại riêng biệt
+        let rate = *speed;
+        let stretched = if (rate - 1.0).abs() >= 0.02 && rate >= 0.3 && rate <= 3.0 {
+            time_stretch_sola(&sentence_samples, target_spec.sample_rate, rate)
+        } else {
+            sentence_samples
+        };
+
+        voice_samples.extend(stretched);
+
         // Chèn khoảng lặng giữa các câu (trừ câu cuối cùng)
-        if idx + 1 < input_wav_paths.len() {
+        if idx + 1 < input_wav_items.len() {
             for _ in 0..pause_samples {
                 voice_samples.push(0i16);
             }

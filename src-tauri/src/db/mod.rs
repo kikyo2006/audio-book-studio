@@ -194,6 +194,36 @@ impl Database {
         Ok(list)
     }
 
+    pub fn get_project_by_id(&self, project_id: &str) -> Result<Project, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT id, title, author, description, source_file_path, source_format, cover_path, cover_base64, chapter_count, total_sentences, \
+                (SELECT COUNT(*) FROM sentences s JOIN chapters c ON s.chapter_id = c.id WHERE c.project_id = projects.id AND s.status = 'ready') AS completed_sentences, \
+                total_duration, created_at, updated_at, COALESCE(status, 'active') as status FROM projects WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+
+        stmt.query_row(params![project_id], |row| {
+            Ok(Project {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                author: row.get(2)?,
+                description: row.get(3)?,
+                source_file_path: row.get(4)?,
+                source_format: row.get(5)?,
+                cover_path: row.get(6)?,
+                cover_base64: row.get(7)?,
+                chapter_count: row.get::<_, i64>(8)? as usize,
+                total_sentences: row.get::<_, i64>(9)? as usize,
+                completed_sentences: row.get::<_, i64>(10)? as usize,
+                total_duration: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
+                status: row.get::<_, String>(14).unwrap_or_else(|_| "active".to_string()),
+            })
+        })
+        .map_err(|e| format!("Không tìm thấy project {}: {}", project_id, e))
+    }
+
     pub fn update_project_status(&self, project_id: &str, status: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
@@ -370,6 +400,16 @@ impl Database {
         conn.execute(
             "UPDATE sentences SET audio_path = ?1, duration = ?2, status = 'ready', voice = ?3, temperature = ?4, speed = ?5, error_message = NULL WHERE id = ?6;",
             params![audio_path, duration, voice, temperature, speed, sentence_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn clear_sentence_audio(&self, sentence_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE sentences SET audio_path = NULL, duration = 0.0, status = 'generating', error_message = NULL WHERE id = ?1;",
+            params![sentence_id],
         )
         .map_err(|e| e.to_string())?;
         Ok(())

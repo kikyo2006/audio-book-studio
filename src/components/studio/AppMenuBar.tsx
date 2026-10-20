@@ -18,6 +18,7 @@ import {
   Repeat,
   Trash2,
   Sliders,
+  Server,
   RefreshCw,
   BookOpen,
   Info,
@@ -480,8 +481,8 @@ export const AppMenuBar: React.FC<AppMenuBarProps> = ({
               className="w-full px-2.5 py-1.5 rounded-lg text-left text-xs flex items-center justify-between hover:bg-zinc-800 hover:text-white transition-colors"
             >
               <div className="flex items-center gap-2">
-                <Sliders className="w-3.5 h-3.5 text-zinc-400" />
-                <span>Cài đặt giọng đọc & TTS...</span>
+                <Server className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Cấu hình Server VieNeu-TTS...</span>
               </div>
             </button>
 

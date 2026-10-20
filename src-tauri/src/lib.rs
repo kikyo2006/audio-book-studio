@@ -75,6 +75,7 @@ pub fn run() {
             commands::project::insert_blank_sentences,
             commands::project::update_chapter_bgm,
             commands::project::update_project_cover,
+            commands::project::reset_project_cover,
             commands::project::delete_project,
             commands::project::update_project_status,
             commands::project::get_casting_presets,

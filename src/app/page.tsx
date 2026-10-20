@@ -364,7 +364,17 @@ export default function Home() {
       )}
 
       {/* Main Studio Body: Chapter List (Left) + Sentence Script (Center) */}
-      <div className="flex-1 flex overflow-hidden">
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          flex: 1,
+          minHeight: 0,
+          overflow: "hidden",
+          width: "100%",
+        }}
+        className="flex-1 flex flex-row overflow-hidden w-full"
+      >
         {activeProject ? (
           <>
             <ChapterList />

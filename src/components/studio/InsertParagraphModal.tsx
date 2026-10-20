@@ -106,7 +106,7 @@ export const InsertParagraphModal: React.FC<InsertParagraphModalProps> = ({
             <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
               <FilePlus className="w-5 h-5" />
             </div>
-            <div>
+            <div style={{ marginLeft: 8 }}>
               <h3 className="font-semibold text-sm text-zinc-100 flex items-center gap-2">
                 Chèn Đoạn Văn (Insert Text)
                 <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono text-[10px]">

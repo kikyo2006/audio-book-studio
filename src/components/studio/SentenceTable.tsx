@@ -113,7 +113,7 @@ const SentenceRow = memo(function SentenceRow({
   onAssignSpeaker,
   onUpdateSilenceDuration,
 }: SentenceRowProps) {
-  const isSilence = item.clean_text.startsWith("[Khoảng lặng");
+  const isSilence = Boolean(item.clean_text?.startsWith("[Khoảng lặng"));
   const [durationInput, setDurationInput] = useState<string>(
     item.duration ? String(item.duration) : "3.0"
   );
@@ -396,7 +396,7 @@ const SentenceRow = memo(function SentenceRow({
           }`}
           title="Nhấp đúp chuột để chỉnh sửa văn bản câu"
         >
-          {renderHighlightedText(item.clean_text, searchQuery, matchCase)}
+          {renderHighlightedText(item.clean_text || item.raw_text || "", searchQuery, matchCase)}
         </p>
       )}
     </div>
@@ -426,6 +426,7 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
     setIsPlaying,
     updateSentenceStatus,
     updateSentenceAudio,
+    clearSentenceAudio,
     updateSentenceText,
     assignSpeakerToSentence,
   } = useProjectStore();
@@ -545,8 +546,16 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
         sentence.voice ||
         (sentence.is_dialogue ? (dialogueVoice || "Thảo Nhi") : selectedVoice);
 
-      updateSentenceStatus(sentence.id, "generating");
+      // 1. Unload và reset trạng thái âm thanh cũ ngay lập tức
+      clearSentenceAudio(sentence.id);
+      setSelectedSentenceId(sentence.id);
+      if (playingSentenceId === sentence.id) {
+        setIsPlaying(false);
+        setPlayingSentenceId(null);
+      }
+
       try {
+        // 2. Chờ TTS xử lý và ghi file âm thanh mới
         const res = await tauriRegenerateSentence({
           sentenceId: sentence.id,
           projectId: activeProject.id,
@@ -556,8 +565,11 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
           temperature: sentence.temperature ?? temperature,
           serverUrl,
         });
+
+        // 3. Nạp file mới vào câu và tự động kích hoạt phát
         updateSentenceAudio(sentence.id, res.audio_path, res.duration, voiceToUse);
-        setSelectedSentenceId(sentence.id);
+        setPlayingSentenceId(sentence.id);
+        setIsPlaying(true);
       } catch (err) {
         updateSentenceStatus(
           sentence.id,
@@ -568,11 +580,15 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
     },
     [
       activeProject,
+      clearSentenceAudio,
       dialogueVoice,
       isServerOnline,
+      playingSentenceId,
       selectedVoice,
       serverUrl,
+      setIsPlaying,
       setIsServerOnline,
+      setPlayingSentenceId,
       setSelectedSentenceId,
       speed,
       temperature,
@@ -807,11 +823,11 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
   const handleDeleteSentence = useCallback(
     (sentence: SentenceItem) => {
       if (!activeChapter || !activeProject) return;
-      const isSilence = sentence.clean_text.startsWith("[Khoảng lặng");
+      const isSilence = Boolean(sentence.clean_text?.startsWith("[Khoảng lặng"));
       const title = isSilence ? "Xác Nhận Xóa Khoảng Lặng" : "Xác Nhận Xóa Câu";
       const desc = isSilence
         ? "Bạn có chắc chắn muốn xóa khoảng lặng này khỏi kịch bản?"
-        : `Bạn có chắc muốn xóa câu thoại: "${sentence.clean_text.slice(0, 60)}..."?`;
+        : `Bạn có chắc muốn xóa câu thoại: "${(sentence.clean_text || sentence.raw_text || "").slice(0, 60)}..."?`;
 
       askConfirm({
         title,
@@ -835,7 +851,13 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
   );
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-zinc-900/30 overflow-hidden relative">
+    <div
+      style={{
+        flex: 1,
+        minWidth: 0,
+      }}
+      className="flex-1 min-w-0 flex flex-col h-full bg-zinc-900/30 overflow-hidden relative"
+    >
       {/* Chapter Title Bar (Clean, uncluttered, professional) */}
       <div className="p-3 border-b border-zinc-800 bg-zinc-950/40 flex items-center justify-between select-none">
         <div className="flex items-center gap-2.5">

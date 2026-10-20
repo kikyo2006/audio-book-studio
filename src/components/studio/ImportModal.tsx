@@ -9,6 +9,10 @@ import {
   CheckCircle2,
   Loader2,
   FolderOpen,
+  Image as ImageIcon,
+  Camera,
+  Trash2,
+  RotateCcw,
 } from "lucide-react";
 import { useProjectStore } from "@/stores/useProjectStore";
 import {
@@ -33,9 +37,41 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
   const [filePath, setFilePath] = useState("");
   const [isParsing, setIsParsing] = useState(false);
   const [parsedData, setParsedData] = useState<EbookParsedData | null>(null);
+  const [originalCoverBase64, setOriginalCoverBase64] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const coverInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const handleCoverFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setErrorMessage("Vui lòng chọn một tệp hình ảnh (.jpg, .png, .webp, .gif)");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const result = event.target?.result;
+      if (typeof result === "string") {
+        setParsedData((prev) => (prev ? { ...prev, cover_base64: result } : null));
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
+  const handleRemoveCover = () => {
+    setParsedData((prev) => (prev ? { ...prev, cover_base64: undefined } : null));
+  };
+
+  const handleResetCover = () => {
+    if (originalCoverBase64) {
+      setParsedData((prev) => (prev ? { ...prev, cover_base64: originalCoverBase64 } : null));
+    }
+  };
 
   const handleBrowseClick = async () => {
     if (isTauriEnvironment()) {
@@ -64,11 +100,13 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
     setIsParsing(true);
     setErrorMessage(null);
     setParsedData(null);
+    setOriginalCoverBase64(null);
 
     try {
       if (isTauriEnvironment()) {
         const data = await tauriParseEbook(path.trim());
         setParsedData(data);
+        setOriginalCoverBase64(data.cover_base64 ?? null);
       } else {
         // Fallback demo for web browser testing
         setTimeout(() => {
@@ -170,7 +208,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
             <div className="w-7 h-7 rounded-lg bg-indigo-600/20 text-indigo-400 flex items-center justify-center">
               <FolderOpen className="w-4 h-4" />
             </div>
-            <h3 className="text-sm font-semibold text-zinc-100">
+            <h3 className="text-sm font-semibold text-zinc-100" style={{ marginLeft: 6 }}>
               Nhập Sách Mới (EPUB / TXT / Markdown)
             </h3>
           </div>
@@ -256,36 +294,101 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
             </p>
           )}
 
+          {/* Hidden native input for cover image */}
+          <input
+            type="file"
+            ref={coverInputRef}
+            onChange={handleCoverFileChange}
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            className="hidden"
+          />
+
           {/* Parsed Preview */}
           {parsedData && (
             <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-lg space-y-3">
               <div className="flex items-start gap-4">
-                {parsedData.cover_base64 ? (
-                  <img
-                    src={parsedData.cover_base64}
-                    alt="Bìa sách"
-                    className="w-16 h-24 object-cover rounded border border-zinc-800 shadow"
-                  />
-                ) : (
-                  <div className="w-16 h-24 bg-zinc-800/80 rounded border border-zinc-700/50 flex flex-col items-center justify-center text-zinc-500">
-                    <BookOpen className="w-6 h-6 mb-1" />
-                    <span className="text-[9px]">Chưa có bìa</span>
-                  </div>
-                )}
+                {/* Cover container with interactive hover / click */}
+                <div className="relative group shrink-0">
+                  <div
+                    onClick={() => coverInputRef.current?.click()}
+                    title="Bấm để đổi hoặc chọn ảnh bìa mới từ máy tính"
+                    className="w-20 h-28 rounded-lg overflow-hidden border border-zinc-700/80 bg-zinc-800/80 shadow cursor-pointer relative flex flex-col items-center justify-center transition-all hover:border-indigo-500 hover:ring-2 hover:ring-indigo-500/30"
+                  >
+                    {parsedData.cover_base64 ? (
+                      <img
+                        src={parsedData.cover_base64}
+                        alt="Bìa sách"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-zinc-500 p-2 text-center">
+                        <ImageIcon className="w-6 h-6 mb-1 text-zinc-400 group-hover:text-indigo-400 transition-colors" />
+                        <span className="text-[10px] leading-tight text-zinc-400 group-hover:text-indigo-300">
+                          Chọn ảnh bìa
+                        </span>
+                      </div>
+                    )}
 
-                <div className="flex-1 space-y-1">
-                  <h4 className="text-sm font-semibold text-zinc-100">
-                    {parsedData.title}
-                  </h4>
-                  <p className="text-xs text-zinc-400">
-                    Tác giả: <span className="text-zinc-200">{parsedData.author}</span>
-                  </p>
-                  <p className="text-[11px] text-zinc-500">
-                    Tổng số chương tìm thấy:{" "}
-                    <span className="text-indigo-400 font-medium">
-                      {parsedData.chapters.length} chương
-                    </span>
-                  </p>
+                    {/* Hover Overlay */}
+                    <div className="absolute inset-0 bg-black/65 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-[10px] font-medium gap-1 px-1 text-center">
+                      <Camera className="w-4 h-4 text-indigo-300" />
+                      <span>{parsedData.cover_base64 ? "Đổi ảnh bìa" : "Chọn ảnh bìa"}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex-1 space-y-2">
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-semibold text-zinc-100 line-clamp-1">
+                      {parsedData.title}
+                    </h4>
+                    <p className="text-xs text-zinc-400">
+                      Tác giả: <span className="text-zinc-200 font-medium">{parsedData.author}</span>
+                    </p>
+                    <p className="text-[11px] text-zinc-500">
+                      Tổng số chương tìm thấy:{" "}
+                      <span className="text-indigo-400 font-medium">
+                        {parsedData.chapters.length} chương
+                      </span>
+                    </p>
+                  </div>
+
+                  {/* Cover action buttons & status badge */}
+                  <div className="flex items-center gap-2 pt-1 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => coverInputRef.current?.click()}
+                      className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded border border-zinc-700/60 text-[11px] font-medium flex items-center gap-1.5 transition-colors"
+                      title="Chọn ảnh từ máy tính để làm bìa sách"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>{parsedData.cover_base64 ? "Đổi ảnh bìa..." : "Tải ảnh bìa lên..."}</span>
+                    </button>
+
+                    {parsedData.cover_base64 && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveCover}
+                        className="px-2 py-1 bg-zinc-800/80 hover:bg-rose-950/40 text-zinc-400 hover:text-rose-400 rounded border border-zinc-700/50 hover:border-rose-500/40 text-[11px] flex items-center gap-1 transition-colors"
+                        title="Gỡ ảnh bìa hiện tại"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Gỡ bìa</span>
+                      </button>
+                    )}
+
+                    {originalCoverBase64 && parsedData.cover_base64 !== originalCoverBase64 && (
+                      <button
+                        type="button"
+                        onClick={handleResetCover}
+                        className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-indigo-300 hover:text-white rounded border border-indigo-700/50 text-[11px] font-medium flex items-center gap-1.5 transition-colors"
+                        title="Khôi phục lại ảnh bìa gốc của sách"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Đặt lại bìa gốc</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 

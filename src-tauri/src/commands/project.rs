@@ -436,6 +436,28 @@ pub async fn update_project_cover(
 }
 
 #[tauri::command]
+pub async fn reset_project_cover(
+    project_id: String,
+    db: State<'_, Arc<Database>>,
+) -> Result<Option<String>, String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let project = db.get_project_by_id(&project_id)?;
+        let source_path = project.source_file_path.ok_or("Dự án không có đường dẫn tệp nguồn sách")?;
+        if !std::path::Path::new(&source_path).exists() {
+            return Err("Tệp sách gốc không còn tồn tại trên máy tính".to_string());
+        }
+        let parsed = crate::services::ebook::parse_ebook_file(&source_path)?;
+        let original_cover = parsed.cover_base64;
+        let cover_to_save = original_cover.clone().unwrap_or_default();
+        db.update_project_cover(&project_id, &cover_to_save)?;
+        Ok(original_cover)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn delete_project(
     project_id: String,
     db: State<'_, Arc<Database>>,

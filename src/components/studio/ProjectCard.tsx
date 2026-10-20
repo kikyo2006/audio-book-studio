@@ -9,9 +9,10 @@ import {
   CheckCircle2,
   ArchiveX,
   RotateCcw,
+  Loader2,
 } from "lucide-react";
 import type { ProjectMetadata } from "@/types";
-import { tauriUpdateProjectCover } from "@/lib/tauri";
+import { tauriResetProjectCover, tauriUpdateProjectCover } from "@/lib/tauri";
 import { useProjectStore } from "@/stores/useProjectStore";
 
 interface ProjectCardProps {
@@ -29,6 +30,21 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { updateProjectCover } = useProjectStore();
+  const [isResettingCover, setIsResettingCover] = React.useState(false);
+
+  const handleResetCover = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsResettingCover(true);
+    try {
+      const originalCover = await tauriResetProjectCover(project.id);
+      updateProjectCover(project.id, originalCover || "");
+    } catch (err) {
+      console.error("Lỗi đặt lại ảnh bìa sách:", err);
+    } finally {
+      setIsResettingCover(false);
+    }
+  };
 
   const progressPercent =
     project.total_sentences > 0
@@ -153,6 +169,23 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
             <Camera className="w-3.5 h-3.5 text-indigo-400" />
             <span>{project.cover_base64 ? "Đổi ảnh bìa" : "+ Tải ảnh bìa"}</span>
           </button>
+
+          {project.source_file_path && (
+            <button
+              type="button"
+              onClick={handleResetCover}
+              disabled={isResettingCover}
+              className="px-2.5 py-1 rounded-lg bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700/80 text-[11px] font-medium flex items-center gap-1.5 shadow-xl hover:scale-105 transition-all disabled:opacity-50"
+              title="Khôi phục lại ảnh bìa gốc ban đầu từ tệp sách"
+            >
+              {isResettingCover ? (
+                <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />
+              ) : (
+                <RotateCcw className="w-3 h-3 text-indigo-400" />
+              )}
+              <span>Đặt lại bìa gốc</span>
+            </button>
+          )}
         </div>
       </div>
 

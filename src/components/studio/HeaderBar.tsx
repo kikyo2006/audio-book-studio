@@ -415,19 +415,6 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             {isServerOnline ? "VieNeu-TTS :8880" : "TTS Offline"}
           </span>
         </button>
-
-        {activeProject && (
-          <button
-            type="button"
-            onClick={onOpenVoiceSettings}
-            className="flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800 transition-colors"
-            title="Cài đặt giọng đọc & thông số TTS"
-          >
-            <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Giọng: {selectedVoice}</span>
-            <Sliders className="w-3 h-3 text-zinc-500 ml-0.5" />
-          </button>
-        )}
       </div>
 
       {/* Right Actions: Primary TTS Action & Export */}

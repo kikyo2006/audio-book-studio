@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::path::Path;
 use std::sync::OnceLock;
 use regex::Regex;
@@ -52,8 +52,19 @@ fn get_hex_entity_re() -> &'static Regex {
 
 fn get_chapter_marker_re() -> &'static Regex {
     CHAPTER_MARKER_RE.get_or_init(|| {
-        Regex::new(r"(?i)^(Chương\s+[0-9IVXLCDMivxlcdm]+.*|Chapter\s+[0-9IVXLCDMivxlcdm]+.*|Hồi\s+[0-9IVXLCDMivxlcdm]+.*|Phần\s+([0-9IVXLCDMivxlcdm]+|dẫn|kết|mở\s+đầu).*|Mở\s+đầu|Lời\s+mở\s+đầu|Lời\s+nói\s+đầu|Vĩ\s+thanh|Lời\s+kết)$").unwrap()
+        Regex::new(r"(?i)^(Chương\s+[0-9]+.*|Chapter\s+[0-9]+.*|Hồi\s+[0-9]+.*|Phần\s+([0-9]+|[IVXLCDM]+|dẫn|kết|mở\s+đầu)(\s*[:\-\.]|\s*$|\s+).*|Mở\s+đầu|Lời\s+mở\s+đầu|Lời\s+nói\s+đầu|Vĩ\s+thanh|Lời\s+kết)$").unwrap()
     })
+}
+
+fn is_valid_marker(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.chars().count() > 70 {
+        return false;
+    }
+    if trimmed.ends_with('.') || trimmed.ends_with('!') || trimmed.ends_with('?') || trimmed.ends_with(';') {
+        return false;
+    }
+    get_chapter_marker_re().is_match(trimmed)
 }
 
 pub fn parse_epub(file_path: &str) -> Result<EbookParsedData, String> {
@@ -125,23 +136,7 @@ pub fn parse_epub(file_path: &str) -> Result<EbookParsedData, String> {
     let description = extract_xml_tag(&opf_content, "dc:description");
 
     // 3. Trích xuất Cover Image nếu có
-    let mut cover_base64: Option<String> = None;
-    let cover_href = find_cover_href(&opf_content);
-    if let Some(rel_href) = cover_href {
-        let full_cover_path = resolve_path(&opf_dir, &rel_href);
-        if let Ok(mut cover_file) = archive.by_name(&full_cover_path) {
-            let mut buf = Vec::new();
-            if cover_file.read_to_end(&mut buf).is_ok() {
-                let ext = Path::new(&full_cover_path)
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("jpeg");
-                let mime = if ext == "png" { "image/png" } else { "image/jpeg" };
-                let b64 = format!("data:{};base64,{}", mime, base64_encode(&buf));
-                cover_base64 = Some(b64);
-            }
-        }
-    }
+    let cover_base64 = extract_cover_base64(&mut archive, &opf_content, &opf_dir);
 
     // 4. Trích xuất danh sách Spine và Manifest để lấy đúng thứ tự chương
     let manifest_items = extract_manifest_items(&opf_content);
@@ -157,7 +152,11 @@ pub fn parse_epub(file_path: &str) -> Result<EbookParsedData, String> {
                 let mut html_content = String::new();
                 if html_file.read_to_string(&mut html_content).is_ok() {
                     let (chap_title, clean_text) = clean_html_to_text(&html_content, chapter_idx);
-                    if !clean_text.trim().is_empty() {
+                    // Bỏ qua trang bìa XHTML đơn thuần (chỉ chứa hình ảnh hoặc text Cover ngắn dưới 50 ký tự)
+                    let is_cover_file = href.to_lowercase().contains("cover") || idref.to_lowercase().contains("cover");
+                    let is_trivial_cover = is_cover_file && clean_text.trim().chars().count() <= 50;
+
+                    if !clean_text.trim().is_empty() && !is_trivial_cover {
                         let sub_chapters = split_into_smart_chapters(&clean_text, &chap_title, &mut chapter_idx);
                         chapters.extend(sub_chapters);
                     }
@@ -166,7 +165,28 @@ pub fn parse_epub(file_path: &str) -> Result<EbookParsedData, String> {
         }
     }
 
-    if chapters.is_empty() {
+    // Gộp thông minh toàn bộ các chương trùng lặp tên/số chương trên toàn cuốn sách
+    let mut final_chapters: Vec<ParsedChapter> = Vec::new();
+    for chap in chapters {
+        let key = extract_chapter_key(&chap.title);
+        if let Some(last) = final_chapters.last_mut() {
+            if extract_chapter_key(&last.title) == key {
+                last.content.push_str("\n\n");
+                last.content.push_str(&chap.content);
+                if chap.title.len() > last.title.len() {
+                    last.title = chap.title;
+                }
+                continue;
+            }
+        }
+        final_chapters.push(chap);
+    }
+
+    for (i, chap) in final_chapters.iter_mut().enumerate() {
+        chap.index = i + 1;
+    }
+
+    if final_chapters.is_empty() {
         return Err("File EPUB không chứa nội dung chương dạng văn bản có thể đọc được".to_string());
     }
 
@@ -175,7 +195,7 @@ pub fn parse_epub(file_path: &str) -> Result<EbookParsedData, String> {
         author,
         description,
         cover_base64,
-        chapters,
+        chapters: final_chapters,
     })
 }
 
@@ -200,17 +220,200 @@ fn extract_xml_tag(xml: &str, tag: &str) -> Option<String> {
     None
 }
 
-fn find_cover_href(opf: &str) -> Option<String> {
-    for line in opf.lines() {
-        if line.contains("<item ") && (line.contains("cover") || line.contains("cover-image")) {
-            if let Some(href_pos) = line.find("href=\"") {
-                let rest = &line[href_pos + 6..];
-                if let Some(end_pos) = rest.find('\"') {
-                    return Some(rest[..end_pos].to_string());
+fn is_image_ext(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".png")
+        || lower.ends_with(".webp")
+        || lower.ends_with(".gif")
+}
+
+fn mime_from_ext(path: &str) -> &'static str {
+    let lower = path.to_lowercase();
+    if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else {
+        "image/jpeg"
+    }
+}
+
+fn extract_cover_base64<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    opf_content: &str,
+    opf_dir: &str,
+) -> Option<String> {
+    let mut candidate_href: Option<String> = None;
+
+    // 1a. Kiểm tra <meta name="cover" content="COVER_ID" />
+    let mut cover_meta_id: Option<String> = None;
+    for line in opf_content.lines() {
+        if line.contains("<meta ") && line.contains("name=\"cover\"") {
+            cover_meta_id = extract_attr(line, "content");
+            if cover_meta_id.is_some() {
+                break;
+            }
+        } else if line.contains("<meta ") && line.contains("content=\"") && line.contains("cover") {
+            if extract_attr(line, "name").as_deref() == Some("cover") {
+                cover_meta_id = extract_attr(line, "content");
+                if cover_meta_id.is_some() {
+                    break;
                 }
             }
         }
     }
+
+    if let Some(ref id) = cover_meta_id {
+        for line in opf_content.lines() {
+            if line.contains("<item ") && line.contains(&format!("id=\"{}\"", id)) {
+                if let Some(href) = extract_attr(line, "href") {
+                    let media_type = extract_attr(line, "media-type").unwrap_or_default();
+                    if media_type.starts_with("image/") || is_image_ext(&href) {
+                        candidate_href = Some(href);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 1b. Kiểm tra properties="cover-image" (chuẩn EPUB 3)
+    if candidate_href.is_none() {
+        for line in opf_content.lines() {
+            if line.contains("<item ") && line.contains("properties=\"cover-image\"") {
+                if let Some(href) = extract_attr(line, "href") {
+                    let media_type = extract_attr(line, "media-type").unwrap_or_default();
+                    if media_type.starts_with("image/") || is_image_ext(&href) {
+                        candidate_href = Some(href);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 1c. Kiểm tra item nào có id hoặc href chứa "cover" và media-type là image hoặc đuôi file ảnh
+    if candidate_href.is_none() {
+        for line in opf_content.lines() {
+            if line.contains("<item ") {
+                let id = extract_attr(line, "id").unwrap_or_default().to_lowercase();
+                let href = extract_attr(line, "href").unwrap_or_default();
+                let media_type = extract_attr(line, "media-type").unwrap_or_default().to_lowercase();
+                let href_lower = href.to_lowercase();
+
+                let is_img = media_type.starts_with("image/") || is_image_ext(&href);
+                let has_cover_name = id.contains("cover") || href_lower.contains("cover");
+
+                if is_img && has_cover_name {
+                    candidate_href = Some(href);
+                    break;
+                }
+            }
+        }
+    }
+
+    // 1d. Nếu tìm thấy cover page dạng xhtml/html (ví dụ cover.xhtml), đọc file xhtml tìm đường dẫn thẻ <img>
+    let mut cover_from_xhtml: Option<String> = None;
+    if candidate_href.is_none() {
+        for line in opf_content.lines() {
+            if line.contains("<item ") {
+                let id = extract_attr(line, "id").unwrap_or_default().to_lowercase();
+                let href = extract_attr(line, "href").unwrap_or_default();
+                let href_lower = href.to_lowercase();
+                if (id.contains("cover") || href_lower.contains("cover"))
+                    && (href_lower.ends_with(".xhtml") || href_lower.ends_with(".html") || href_lower.ends_with(".htm"))
+                {
+                    let full_xhtml_path = resolve_path(opf_dir, &href);
+                    let mut xhtml_text = String::new();
+                    if let Ok(mut xhtml_file) = archive.by_name(&full_xhtml_path) {
+                        let _ = xhtml_file.read_to_string(&mut xhtml_text);
+                    }
+
+                    if !xhtml_text.is_empty() {
+                        let xhtml_dir = Path::new(&full_xhtml_path)
+                            .parent()
+                            .map(|p| p.to_str().unwrap_or(""))
+                            .unwrap_or("");
+                        for xline in xhtml_text.lines() {
+                            if xline.contains("<img ") || xline.contains("<image ") {
+                                let img_src = extract_attr(xline, "src")
+                                    .or_else(|| extract_attr(xline, "xlink:href"))
+                                    .or_else(|| extract_attr(xline, "href"));
+                                if let Some(src) = img_src {
+                                    if is_image_ext(&src) {
+                                        cover_from_xhtml = Some(resolve_path(xhtml_dir, &src));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if cover_from_xhtml.is_some() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(ref path) = cover_from_xhtml {
+        if let Ok(mut img_file) = archive.by_name(path) {
+            let mut buf = Vec::new();
+            if img_file.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+                let mime = mime_from_ext(path);
+                return Some(format!("data:{};base64,{}", mime, base64_encode(&buf)));
+            }
+        }
+    }
+
+    // Nếu candidate_href tìm thấy từ 1a, 1b, 1c -> Đọc file ảnh tương ứng
+    if let Some(ref rel_href) = candidate_href {
+        let full_cover_path = resolve_path(opf_dir, rel_href);
+        if let Ok(mut cover_file) = archive.by_name(&full_cover_path) {
+            let mut buf = Vec::new();
+            if cover_file.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+                let mime = mime_from_ext(&full_cover_path);
+                return Some(format!("data:{};base64,{}", mime, base64_encode(&buf)));
+            }
+        }
+    }
+
+    // 2. Fallback quét trực tiếp trong zip archive
+    let mut cover_archive_path: Option<String> = None;
+    let mut first_image_path: Option<String> = None;
+
+    for i in 0..archive.len() {
+        if let Ok(file) = archive.by_index(i) {
+            let name = file.name().to_string();
+            let name_lower = name.to_lowercase();
+            if is_image_ext(&name_lower) {
+                if first_image_path.is_none() {
+                    first_image_path = Some(name.clone());
+                }
+                if name_lower.contains("cover") {
+                    cover_archive_path = Some(name);
+                    break;
+                }
+            }
+        }
+    }
+
+    let final_path = cover_archive_path.or(first_image_path);
+    if let Some(path) = final_path {
+        if let Ok(mut img_file) = archive.by_name(&path) {
+            let mut buf = Vec::new();
+            if img_file.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+                let mime = mime_from_ext(&path);
+                return Some(format!("data:{};base64,{}", mime, base64_encode(&buf)));
+            }
+        }
+    }
+
     None
 }
 
@@ -340,6 +543,18 @@ fn decode_html_entities(s: &str) -> String {
     text
 }
 
+fn extract_chapter_key(title: &str) -> String {
+    let lower = title.to_lowercase();
+    let trimmed = lower.trim();
+    if let Some(pos) = trimmed.find('-') {
+        trimmed[..pos].trim().to_string()
+    } else if let Some(pos) = trimmed.find(':') {
+        trimmed[..pos].trim().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Tự động tách một khối văn bản lớn thành nhiều chương nếu phát hiện các marker chương (Chương X, Chapter X...)
 fn split_into_smart_chapters(
     raw_content: &str,
@@ -351,12 +566,10 @@ fn split_into_smart_chapters(
         return Vec::new();
     }
 
-    let marker_re = get_chapter_marker_re();
-
-    // Tìm tất cả các dòng là tiêu đề chương
+    // Tìm tất cả các dòng là tiêu đề chương hợp lệ
     let mut markers: Vec<usize> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
-        if marker_re.is_match(line) {
+        if is_valid_marker(line) {
             markers.push(i);
         }
     }
@@ -377,7 +590,7 @@ fn split_into_smart_chapters(
         return vec![chap];
     }
 
-    let mut result = Vec::new();
+    let mut temp_chapters = Vec::new();
 
     // 1. Xử lý đoạn văn bản trước marker đầu tiên (nếu có, ví dụ Lời tựa, Giới thiệu)
     if markers[0] > 0 {
@@ -391,7 +604,7 @@ fn split_into_smart_chapters(
                 fallback_title.to_string()
             };
 
-            result.push(ParsedChapter {
+            temp_chapters.push(ParsedChapter {
                 index: *chapter_idx_counter,
                 title: intro_title,
                 content: intro_content,
@@ -411,24 +624,32 @@ fn split_into_smart_chapters(
 
         let raw_marker = lines[start_line];
         let mut chapter_title = raw_marker.to_string();
-        let content_start;
+        let mut content_start = start_line + 1;
 
         // Nếu dòng kế tiếp là phụ đề chương ngắn (ví dụ: Chương 1 \n Cưỡng hiếp cả thành phố)
         if start_line + 1 < end_line {
             let next_line = lines[start_line + 1];
-            if !marker_re.is_match(next_line) && next_line.chars().count() <= 60 && !next_line.ends_with('.') {
-                chapter_title = format!("{} - {}", raw_marker, next_line);
-                content_start = start_line + 2;
-            } else {
-                content_start = start_line + 1;
+            if !is_valid_marker(next_line) && next_line.chars().count() <= 60 && !next_line.ends_with('.') {
+                let is_part_marker = next_line.to_lowercase().starts_with("(phần") || next_line.to_lowercase().starts_with("phần ");
+                if is_part_marker {
+                    content_start = start_line + 2;
+                } else {
+                    chapter_title = format!("{} - {}", raw_marker, next_line);
+                    content_start = start_line + 2;
+                    // Kiểm tra tiếp nếu dòng thứ 3 là (phần X) thì bỏ qua khỏi nội dung
+                    if content_start < end_line {
+                        let third_line = lines[content_start];
+                        if third_line.to_lowercase().starts_with("(phần") {
+                            content_start += 1;
+                        }
+                    }
+                }
             }
-        } else {
-            content_start = start_line + 1;
         }
 
         let chapter_content = lines[content_start..end_line].join("\n\n");
         if !chapter_content.trim().is_empty() {
-            result.push(ParsedChapter {
+            temp_chapters.push(ParsedChapter {
                 index: *chapter_idx_counter,
                 title: chapter_title,
                 content: chapter_content,
@@ -437,7 +658,24 @@ fn split_into_smart_chapters(
         }
     }
 
-    if result.is_empty() {
+    // 3. Gộp thông minh các phần của cùng một chương (ví dụ Chương 21 phần 1, 2, 3)
+    let mut merged: Vec<ParsedChapter> = Vec::new();
+    for chap in temp_chapters {
+        let key = extract_chapter_key(&chap.title);
+        if let Some(last) = merged.last_mut() {
+            if extract_chapter_key(&last.title) == key {
+                last.content.push_str("\n\n");
+                last.content.push_str(&chap.content);
+                if chap.title.len() > last.title.len() {
+                    last.title = chap.title;
+                }
+                continue;
+            }
+        }
+        merged.push(chap);
+    }
+
+    if merged.is_empty() {
         let chap = ParsedChapter {
             index: *chapter_idx_counter,
             title: fallback_title.to_string(),
@@ -446,7 +684,7 @@ fn split_into_smart_chapters(
         *chapter_idx_counter += 1;
         vec![chap]
     } else {
-        result
+        merged
     }
 }
 
@@ -494,6 +732,10 @@ mod tests {
         }
         let parsed = parse_epub(epub_path).expect("Parse thất bại");
         println!("Title: {}", parsed.title);
+        println!("Has cover: {}", parsed.cover_base64.is_some());
+        if let Some(ref c) = parsed.cover_base64 {
+            println!("Cover header: {} (len: {})", &c[..c.len().min(50)], c.len());
+        }
         println!("Chapters count: {}", parsed.chapters.len());
         for c in parsed.chapters.iter().take(5) {
             println!("  [Chapter {}] {}", c.index, c.title);
