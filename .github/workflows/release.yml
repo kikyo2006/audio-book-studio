@@ -1,0 +1,101 @@
+name: Build installers
+
+# Build bộ cài Windows / macOS (Apple Silicon + Intel) / Linux bằng Tauri.
+# - Push tag dạng v* (VD: v0.1.0) hoặc chạy tay (Actions -> Build installers -> Run workflow).
+# - Kết quả được đính kèm vào một GitHub Release ở dạng DRAFT, anh kiểm tra rồi bấm Publish.
+# - Trước khi gắn tag nhớ tăng version trong src-tauri/tauri.conf.json, src-tauri/Cargo.toml và package.json.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-installers-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            platform: windows-latest
+            args: ""
+            rust_targets: ""
+          - name: macOS Apple Silicon
+            platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+            rust_targets: "aarch64-apple-darwin"
+          - name: macOS Intel
+            platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+            rust_targets: "x86_64-apple-darwin"
+          - name: Linux x64
+            platform: ubuntu-22.04
+            args: ""
+            rust_targets: ""
+
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: ${{ matrix.name }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and publish installers
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # package.json chưa có script "tauri" nên gọi qua pnpm (@tauri-apps/cli nằm trong devDependencies)
+          tauriScript: pnpm tauri
+          # Tag v* thì dùng đúng tag đó, chạy tay thì dùng version trong tauri.conf.json
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: "BookStudio v__VERSION__"
+          releaseBody: "Bộ cài BookStudio. Windows (.msi / .exe), macOS (.dmg), Linux (.AppImage / .deb / .rpm)."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
