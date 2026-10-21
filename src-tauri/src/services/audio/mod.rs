@@ -507,6 +507,46 @@ pub fn concatenate_sentence_wavs_with_bgm(
     Ok(duration_seconds)
 }
 
+/// Xóa đoạn [start_secs, end_secs) khỏi file audio và ghi phần còn lại ra WAV mono 16-bit mới.
+/// Trả về độ dài mới (giây).
+pub fn remove_region_to_wav(
+    source_path: &Path,
+    output_path: &Path,
+    start_secs: f64,
+    end_secs: f64,
+) -> Result<f64, String> {
+    let (samples, sr) = decode_audio_file(source_path)?;
+    if samples.is_empty() || sr == 0 {
+        return Err("File audio không chứa dữ liệu hợp lệ.".to_string());
+    }
+    let total = samples.len();
+    let start = ((start_secs.max(0.0) * sr as f64).round() as usize).min(total);
+    let end = ((end_secs.max(0.0) * sr as f64).round() as usize).min(total);
+    if end <= start {
+        return Err("Vùng chọn không hợp lệ.".to_string());
+    }
+    if end - start >= total {
+        return Err("Không thể cắt toàn bộ file audio, hãy dùng nút xóa/gỡ thay thế.".to_string());
+    }
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: sr,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(output_path, spec)
+        .map_err(|e| format!("Lỗi tạo file WAV: {}", e))?;
+    let mut written = 0usize;
+    for &v in samples[..start].iter().chain(samples[end..].iter()) {
+        let q = (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        writer.write_sample(q).map_err(|e| e.to_string())?;
+        written += 1;
+    }
+    writer.finalize().map_err(|e| format!("Lỗi hoàn tất file WAV: {}", e))?;
+    Ok(written as f64 / sr as f64)
+}
+
 pub fn generate_silence_wav(output_path: &Path, duration_secs: f64) -> Result<(), String> {
     if let Some(parent) = output_path.parent() {
         let _ = std::fs::create_dir_all(parent);

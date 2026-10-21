@@ -24,6 +24,7 @@ import {
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useStudioSettingsStore } from "@/stores/useStudioSettingsStore";
 import {
+  tauriCutAudioRegion,
   tauriReadAudioBase64,
   tauriSelectBgmFile,
   tauriUpdateChapterBgm,
@@ -227,6 +228,7 @@ export const WaveformPanel: React.FC = () => {
     setPlayingSentenceId,
     setIsPlaying,
     updateChapterBgm,
+    updateSentenceAudio,
   } = useProjectStore();
 
   const {
@@ -894,17 +896,54 @@ export const WaveformPanel: React.FC = () => {
     });
   };
 
-  const handleCutSelection = () => {
+  // Remove the selected range from the real audio file (voice sentence or chapter BGM)
+  const removeSelectedAudio = async (): Promise<boolean> => {
+    if (!selectedRegion) return false;
+    const { target, start, end } = selectedRegion;
+    const filePath = target === "voice" ? activeSentence?.audio_path : activeChapter?.bgm_path;
+    const id = target === "voice" ? activeSentence?.id : activeChapter?.id;
+    if (!filePath || !id) return false;
+
+    try {
+      const res = await tauriCutAudioRegion({
+        target,
+        id,
+        filePath,
+        bgmVolume: target === "bgm" ? bgmVolume : null,
+        startSecs: start,
+        endSecs: end,
+      });
+      voiceRegionsRef.current?.clearRegions();
+      bgmRegionsRef.current?.clearRegions();
+      setSelectedRegion(null);
+      if (target === "voice") {
+        updateSentenceAudio(id, res.path, res.duration);
+      } else {
+        updateChapterBgm(id, res.path, bgmVolume);
+      }
+      return true;
+    } catch (err) {
+      setClipboardNotice(`Không cắt được audio: ${String(err)}`);
+      setTimeout(() => setClipboardNotice(null), 3500);
+      return false;
+    }
+  };
+
+  const handleCutSelection = async () => {
     if (!selectedRegion) return;
     handleCopySelection();
-    if (selectedRegion.target === "voice" && voiceRegionsRef.current) {
-      voiceRegionsRef.current.clearRegions();
-    } else if (selectedRegion.target === "bgm" && bgmRegionsRef.current) {
-      bgmRegionsRef.current.clearRegions();
+    if (await removeSelectedAudio()) {
+      setClipboardNotice("Đã cắt vùng chọn khỏi audio!");
+      setTimeout(() => setClipboardNotice(null), 2500);
     }
-    setSelectedRegion(null);
-    setClipboardNotice("Đã cắt vùng chọn!");
-    setTimeout(() => setClipboardNotice(null), 2500);
+  };
+
+  const handleDeleteSelection = async () => {
+    if (!selectedRegion) return;
+    if (await removeSelectedAudio()) {
+      setClipboardNotice("Đã xóa vùng chọn khỏi audio!");
+      setTimeout(() => setClipboardNotice(null), 2500);
+    }
   };
 
   const handlePlaySelection = () => {
@@ -1049,6 +1088,16 @@ export const WaveformPanel: React.FC = () => {
             >
               <Scissors className="w-3 h-3 text-rose-400" />
               <span>Cut</span>
+            </button>
+
+            <button
+              onClick={handleDeleteSelection}
+              disabled={!selectedRegion}
+              className="flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-800 hover:bg-rose-950/60 hover:text-rose-300 text-zinc-300 text-[11px] disabled:opacity-30 transition-colors"
+              title="Xóa vùng chọn khỏi audio (Delete)"
+            >
+              <Trash2 className="w-3 h-3 text-rose-400" />
+              <span>Delete</span>
             </button>
 
             {selectedRegion && (

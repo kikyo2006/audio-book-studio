@@ -312,6 +312,62 @@ pub async fn export_batch_chapters(
     .map_err(|e| format!("Task export hàng loạt lỗi: {}", e))?
 }
 
+#[derive(serde::Serialize)]
+pub struct CutRegionResult {
+    pub path: String,
+    pub duration: f64,
+}
+
+/// Cắt bỏ vùng [start, end] khỏi audio của câu thoại (`voice`) hoặc BGM chương (`bgm`).
+/// File gốc được giữ nguyên, kết quả ghi ra file mới cùng thư mục rồi cập nhật DB.
+#[tauri::command]
+pub async fn cut_audio_region(
+    target: String,
+    id: String,
+    file_path: String,
+    bgm_volume: Option<f64>,
+    start_secs: f64,
+    end_secs: f64,
+    db: State<'_, Arc<Database>>,
+) -> Result<CutRegionResult, String> {
+    let db = db.inner().clone();
+
+    tokio::task::spawn_blocking(move || {
+        let is_voice = match target.as_str() {
+            "voice" => true,
+            "bgm" => false,
+            other => return Err(format!("Track không hợp lệ: {}", other)),
+        };
+
+        let source = PathBuf::from(&file_path);
+        if !source.exists() {
+            return Err(format!("Không tìm thấy file audio: {}", source.display()));
+        }
+
+        let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("audio");
+        let stem = stem.split("_cut_").next().unwrap_or(stem);
+        let output = source.with_file_name(format!(
+            "{}_cut_{}.wav",
+            stem,
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        ));
+
+        let duration =
+            crate::services::audio::remove_region_to_wav(&source, &output, start_secs, end_secs)?;
+        let out_str = output.to_string_lossy().to_string();
+
+        if is_voice {
+            db.update_sentence_audio_file(&id, &out_str, duration)?;
+        } else {
+            db.update_chapter_bgm(&id, Some(out_str.clone()), bgm_volume)?;
+        }
+
+        Ok(CutRegionResult { path: out_str, duration })
+    })
+    .await
+    .map_err(|e| format!("Task cắt audio lỗi: {}", e))?
+}
+
 #[tauri::command]
 pub async fn read_audio_base64(file_path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {

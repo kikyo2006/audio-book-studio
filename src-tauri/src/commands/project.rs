@@ -576,6 +576,54 @@ pub async fn update_silence_duration(
     .map_err(|e| e.to_string())?
 }
 
+/// Dán bản sao của một câu (mọi loại: thoại, khoảng lặng, SFX, BGM, ...) xuống ngay dưới câu đích.
+/// File audio được copy sang file cache mới để hai câu không dùng chung file.
+#[tauri::command]
+pub async fn paste_sentence(
+    project_id: String,
+    source_sentence_id: String,
+    target_sentence_id: String,
+    app_handle: AppHandle,
+    db: State<'_, Arc<Database>>,
+) -> Result<Sentence, String> {
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("./data"));
+
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let source = db
+            .get_sentence_by_id(&source_sentence_id)?
+            .ok_or_else(|| "Câu đã sao chép không còn tồn tại (có thể đã bị xóa).".to_string())?;
+
+        let new_id = uuid::Uuid::new_v4().to_string();
+        let mut new_audio: Option<String> = None;
+        if let Some(src_path) = source.audio_path.as_ref() {
+            let src = PathBuf::from(src_path);
+            if src.exists() {
+                let dst = get_sentence_audio_cache_path(&app_dir, &project_id, &new_id);
+                if let Some(parent) = dst.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                std::fs::copy(&src, &dst)
+                    .map_err(|e| format!("Không copy được file audio: {}", e))?;
+                new_audio = Some(dst.to_string_lossy().to_string());
+            }
+        }
+
+        let result = db.insert_sentence_copy(&source, &target_sentence_id, &new_id, new_audio.as_deref());
+        if result.is_err() {
+            if let Some(p) = new_audio {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn delete_sentence(
     sentence_id: String,

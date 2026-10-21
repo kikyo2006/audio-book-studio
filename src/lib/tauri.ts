@@ -302,6 +302,27 @@ export async function tauriReadAudioBase64(filePath: string): Promise<string> {
   return await invoke<string>("read_audio_base64", { filePath });
 }
 
+export async function tauriCutAudioRegion(params: {
+  target: "voice" | "bgm";
+  id: string;
+  filePath: string;
+  bgmVolume?: number | null;
+  startSecs: number;
+  endSecs: number;
+}): Promise<{ path: string; duration: number }> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Cắt audio cần backend Tauri");
+  }
+  return await invoke<{ path: string; duration: number }>("cut_audio_region", {
+    target: params.target,
+    id: params.id,
+    filePath: params.filePath,
+    bgmVolume: params.bgmVolume ?? null,
+    startSecs: params.startSecs,
+    endSecs: params.endSecs,
+  });
+}
+
 export async function tauriSaveCharacter(
   character: import("@/types").CharacterProfile
 ): Promise<void> {
@@ -531,6 +552,21 @@ export async function tauriAddSilenceSentence(params: {
     targetSentenceId: params.targetSentenceId,
     position: params.position,
     durationSecs: params.durationSecs,
+  });
+}
+
+export async function tauriPasteSentence(params: {
+  projectId: string;
+  sourceSentenceId: string;
+  targetSentenceId: string;
+}): Promise<SentenceItem> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Dán câu chỉ khả dụng trên desktop app.");
+  }
+  return await invoke<SentenceItem>("paste_sentence", {
+    projectId: params.projectId,
+    sourceSentenceId: params.sourceSentenceId,
+    targetSentenceId: params.targetSentenceId,
   });
 }
 

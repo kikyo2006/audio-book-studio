@@ -22,6 +22,7 @@ import { useProjectStore } from "@/stores/useProjectStore";
 import { useStudioSettingsStore } from "@/stores/useStudioSettingsStore";
 import { useFindReplaceStore } from "@/stores/useFindReplaceStore";
 import { useConfirmStore } from "@/stores/useConfirmStore";
+import { useSentenceClipboardStore } from "@/stores/useSentenceClipboardStore";
 import {
   tauriAddSilenceSentence,
   tauriAssignSentenceSpeaker,
@@ -31,6 +32,7 @@ import {
   tauriGetSentences,
   tauriInsertBlankSentences,
   tauriMoveSentence,
+  tauriPasteSentence,
   tauriRegenerateSentence,
   tauriUpdateSentenceText,
   tauriUpdateSilenceDuration,
@@ -1089,6 +1091,88 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
     [activeChapter, activeProject, setSentences, setChapters, askConfirm]
   );
 
+  const handleCopySentence = useCallback((sentence: SentenceItem) => {
+    useSentenceClipboardStore.getState().setCopiedSentenceId(sentence.id);
+  }, []);
+
+  // Paste = insert a duplicate right below the target sentence (works for every sentence type)
+  const handlePasteSentence = useCallback(
+    async (targetSentence: SentenceItem) => {
+      if (!activeProject || !activeChapter) return;
+      const sourceId = useSentenceClipboardStore.getState().copiedSentenceId;
+      if (!sourceId) return;
+      try {
+        const created = await tauriPasteSentence({
+          projectId: activeProject.id,
+          sourceSentenceId: sourceId,
+          targetSentenceId: targetSentence.id,
+        });
+        const refreshed = await tauriGetSentences(activeChapter.id);
+        setSentences(refreshed);
+        setSelectedSentenceId(created.id);
+        const updatedChapters = await tauriGetChapters(activeProject.id);
+        setChapters(updatedChapters);
+      } catch (err) {
+        console.error("Lỗi dán câu:", err);
+        alert(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [activeProject, activeChapter, setSentences, setSelectedSentenceId, setChapters]
+  );
+
+  // Ctrl+C / Ctrl+V on sentences. Skipped while typing or when text is selected,
+  // so normal text copy/paste keeps working.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.altKey || e.shiftKey) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key !== "c" && key !== "v") return;
+      if (!selectedSentenceId || editingId) return;
+      if (contextMenu || moveModal.isOpen || sfxModal.isOpen || bgmModal.isOpen) return;
+      if (useConfirmStore.getState().isOpen) return;
+
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (target && target !== document.body && !parentRef.current?.contains(target)) {
+        return;
+      }
+      // Let the browser copy highlighted text
+      if (key === "c" && (window.getSelection()?.toString() ?? "") !== "") return;
+
+      const sentence = sentences.find((s) => s.id === selectedSentenceId);
+      if (!sentence) return;
+
+      if (key === "c") {
+        e.preventDefault();
+        handleCopySentence(sentence);
+      } else if (useSentenceClipboardStore.getState().copiedSentenceId) {
+        e.preventDefault();
+        handlePasteSentence(sentence);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    selectedSentenceId,
+    editingId,
+    contextMenu,
+    moveModal.isOpen,
+    sfxModal.isOpen,
+    bgmModal.isOpen,
+    sentences,
+    handleCopySentence,
+    handlePasteSentence,
+  ]);
+
   // Phím Delete: xóa câu đang chọn (giống menu chuột phải "Xóa câu này")
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1308,6 +1392,8 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
           if (onOpenSplitChapter) onOpenSplitChapter();
         }}
         onDeleteSentence={handleDeleteSentence}
+        onCopySentence={handleCopySentence}
+        onPasteSentence={handlePasteSentence}
       />
 
       {/* Modal Chuyển Câu đến trước/sau dòng */}

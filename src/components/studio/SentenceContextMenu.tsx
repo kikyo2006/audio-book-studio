@@ -14,6 +14,8 @@ import {
   Edit2,
   Trash2,
   Layers,
+  Copy,
+  ClipboardPaste,
   UserCheck,
   ChevronRight,
   FileText,
@@ -29,6 +31,7 @@ import {
 } from "lucide-react";
 import { SFX_CATALOG, SfxGroup, SfxItem } from "@/data/sfxCatalog";
 import { isNonSpeechSentenceText } from "@/lib/utils";
+import { useSentenceClipboardStore } from "@/stores/useSentenceClipboardStore";
 import type { CharacterProfile, SentenceItem } from "@/types";
 
 export interface ContextMenuState {
@@ -73,6 +76,8 @@ interface SentenceContextMenuProps {
   onAssignSpeaker: (sentence: SentenceItem, speakerName: string) => void;
   onOpenGroupModal: (sentence: SentenceItem) => void;
   onDeleteSentence: (sentence: SentenceItem) => void;
+  onCopySentence: (sentence: SentenceItem) => void;
+  onPasteSentence: (sentence: SentenceItem) => void;
 }
 
 export const SentenceContextMenu: React.FC<SentenceContextMenuProps> = ({
@@ -93,7 +98,10 @@ export const SentenceContextMenu: React.FC<SentenceContextMenuProps> = ({
   onAssignSpeaker,
   onOpenGroupModal,
   onDeleteSentence,
+  onCopySentence,
+  onPasteSentence,
 }) => {
+  const hasCopied = useSentenceClipboardStore((st) => st.copiedSentenceId !== null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
   const [activeSfxGroupId, setActiveSfxGroupId] = useState<string | null>(null);
@@ -725,6 +733,38 @@ export const SentenceContextMenu: React.FC<SentenceContextMenuProps> = ({
               </div>
             )}
           </div>
+        )}
+
+        <div className="my-1 border-t border-[#27272a]" />
+
+        {/* Copy sentence */}
+        <button
+          onMouseEnter={() => setActiveSubmenu(null)}
+          onClick={() => {
+            onCopySentence(menu.sentence);
+            onClose();
+            setActiveSubmenu(null);
+          }}
+          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left transition-colors cursor-pointer text-zinc-300 hover:bg-zinc-700/80 hover:text-white"
+        >
+          <Copy className="w-3.5 h-3.5 text-sky-400" />
+          <span>Sao chép câu này (Ctrl+C)</span>
+        </button>
+
+        {/* Paste sentence (only after something was copied) */}
+        {hasCopied && (
+          <button
+            onMouseEnter={() => setActiveSubmenu(null)}
+            onClick={() => {
+              onPasteSentence(menu.sentence);
+              onClose();
+              setActiveSubmenu(null);
+            }}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left transition-colors cursor-pointer text-zinc-300 hover:bg-zinc-700/80 hover:text-white"
+          >
+            <ClipboardPaste className="w-3.5 h-3.5 text-sky-400" />
+            <span>Dán xuống dưới (Ctrl+V)</span>
+          </button>
         )}
 
         <div className="my-1 border-t border-[#27272a]" />

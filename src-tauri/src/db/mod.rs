@@ -495,6 +495,21 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_sentence_audio_file(
+        &self,
+        sentence_id: &str,
+        audio_path: &str,
+        duration: f64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE sentences SET audio_path = ?1, duration = ?2 WHERE id = ?3;",
+            params![audio_path, duration, sentence_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn clear_sentence_audio(&self, sentence_id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
@@ -1484,6 +1499,126 @@ impl Database {
         tx.commit().map_err(|e| e.to_string())?;
 
         Ok(new_chapter)
+    }
+
+    pub fn get_sentence_by_id(&self, sentence_id: &str) -> Result<Option<Sentence>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT id, chapter_id, idx, raw_text, clean_text, is_dialogue, speaker, audio_path, duration, status, voice, temperature, speed, error_message FROM sentences WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![sentence_id], |row| {
+                Ok(Sentence {
+                    id: row.get(0)?,
+                    chapter_id: row.get(1)?,
+                    index: row.get::<_, i64>(2)? as usize,
+                    raw_text: row.get(3)?,
+                    clean_text: row.get(4)?,
+                    is_dialogue: row.get::<_, i64>(5)? != 0,
+                    speaker: row.get(6)?,
+                    audio_path: row.get(7)?,
+                    duration: row.get(8)?,
+                    status: row.get(9)?,
+                    voice: row.get(10)?,
+                    temperature: row.get(11)?,
+                    speed: row.get(12)?,
+                    error_message: row.get(13)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        match rows.next() {
+            Some(r) => r.map(Some).map_err(|e| e.to_string()),
+            None => Ok(None),
+        }
+    }
+
+    /// Chèn một bản sao của `source` (mọi trường, mọi loại câu) ngay dưới `target_sentence_id`.
+    pub fn insert_sentence_copy(
+        &self,
+        source: &Sentence,
+        target_sentence_id: &str,
+        new_id: &str,
+        new_audio_path: Option<&str>,
+    ) -> Result<Sentence, String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        let (chapter_id, target_idx): (String, i64) = tx
+            .query_row(
+                "SELECT chapter_id, idx FROM sentences WHERE id = ?1;",
+                params![target_sentence_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|e| format!("Không tìm thấy câu đích: {}", e))?;
+        let new_idx = target_idx + 1;
+
+        tx.execute(
+            "UPDATE sentences SET idx = idx + 1 WHERE chapter_id = ?1 AND idx >= ?2;",
+            params![chapter_id, new_idx],
+        )
+        .map_err(|e| format!("Lỗi cập nhật chỉ mục câu: {}", e))?;
+
+        tx.execute(
+            "INSERT INTO sentences (
+                id, chapter_id, idx, raw_text, clean_text, is_dialogue, speaker,
+                audio_path, duration, status, voice, temperature, speed, error_message
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);",
+            params![
+                new_id,
+                chapter_id,
+                new_idx,
+                source.raw_text,
+                source.clean_text,
+                source.is_dialogue as i64,
+                source.speaker,
+                new_audio_path,
+                source.duration,
+                source.status,
+                source.voice,
+                source.temperature,
+                source.speed,
+                source.error_message,
+            ],
+        )
+        .map_err(|e| format!("Lỗi chèn bản sao câu: {}", e))?;
+
+        tx.execute(
+            "UPDATE chapters SET
+                sentence_count = (SELECT COUNT(*) FROM sentences WHERE chapter_id = ?1),
+                ready_sentence_count = (SELECT COUNT(*) FROM sentences WHERE chapter_id = ?1 AND status = 'ready'),
+                total_duration = (SELECT COALESCE(SUM(duration), 0.0) FROM sentences WHERE chapter_id = ?1)
+             WHERE id = ?1;",
+            params![chapter_id],
+        )
+        .map_err(|e| e.to_string())?;
+
+        let project_id: String = tx
+            .query_row(
+                "SELECT project_id FROM chapters WHERE id = ?1;",
+                params![chapter_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        if !project_id.is_empty() {
+            tx.execute(
+                "UPDATE projects SET
+                    total_sentences = (SELECT COUNT(*) FROM sentences JOIN chapters ON sentences.chapter_id = chapters.id WHERE chapters.project_id = ?1 AND COALESCE(chapters.is_enabled, 1) = 1),
+                    completed_sentences = (SELECT COUNT(*) FROM sentences JOIN chapters ON sentences.chapter_id = chapters.id WHERE chapters.project_id = ?1 AND COALESCE(chapters.is_enabled, 1) = 1 AND sentences.status = 'ready'),
+                    total_duration = (SELECT COALESCE(SUM(duration), 0.0) FROM sentences JOIN chapters ON sentences.chapter_id = chapters.id WHERE chapters.project_id = ?1 AND COALESCE(chapters.is_enabled, 1) = 1)
+                 WHERE id = ?1;",
+                params![project_id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        tx.commit().map_err(|e| e.to_string())?;
+
+        let mut copy = source.clone();
+        copy.id = new_id.to_string();
+        copy.chapter_id = chapter_id;
+        copy.index = new_idx as usize;
+        copy.audio_path = new_audio_path.map(|s| s.to_string());
+        Ok(copy)
     }
 
     pub fn insert_silence_sentence(
