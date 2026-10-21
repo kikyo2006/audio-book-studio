@@ -34,3 +34,4 @@ uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1.10"
 quick-xml = "0.36"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+tauri-plugin-window-state = "2"
