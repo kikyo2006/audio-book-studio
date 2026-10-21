@@ -22,13 +22,14 @@ import {
   RefreshCw,
   BookOpen,
   Info,
+  Settings2,
 } from "lucide-react";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useStudioSettingsStore } from "@/stores/useStudioSettingsStore";
 import { useFindReplaceStore } from "@/stores/useFindReplaceStore";
 import { useConfirmStore } from "@/stores/useConfirmStore";
 import { tauriCheckTtsConnection, tauriDeleteProject } from "@/lib/tauri";
-import { WAVEFORM_ZOOM_MAX, WAVEFORM_ZOOM_MIN } from "@/lib/utils";
+import { stepWaveformZoom } from "@/lib/utils";
 import type { ProjectMetadata } from "@/types";
 
 interface AppMenuBarProps {
@@ -43,6 +44,7 @@ interface AppMenuBarProps {
   onStopBatch?: () => void;
   onOpenShortcutsHelp?: () => void;
   onOpenAbout?: () => void;
+  onOpenSettings?: () => void;
 }
 
 type ActiveMenu = "file" | "edit" | "audio" | "view" | "help" | null;
@@ -59,6 +61,7 @@ export const AppMenuBar: React.FC<AppMenuBarProps> = ({
   onStopBatch,
   onOpenShortcutsHelp,
   onOpenAbout,
+  onOpenSettings,
 }) => {
   const [activeMenu, setActiveMenu] = useState<ActiveMenu>(null);
   const menuBarRef = useRef<HTMLDivElement | null>(null);
@@ -67,6 +70,7 @@ export const AppMenuBar: React.FC<AppMenuBarProps> = ({
     projects,
     activeProject,
     activeChapter,
+    chapters,
     sentences,
     isBatchGenerating,
     removeProject,
@@ -161,6 +165,8 @@ export const AppMenuBar: React.FC<AppMenuBarProps> = ({
   };
 
   const readyCount = sentences.filter((s) => s.status === "ready").length;
+  // Export is available whenever any enabled chapter has audio, regardless of the selected chapter
+  const canExport = chapters.some((c) => c.is_enabled !== false && (c.ready_sentence_count || 0) > 0);
 
   return (
     <div className="flex items-center gap-0.5 text-xs select-none" ref={menuBarRef}>
@@ -256,7 +262,7 @@ export const AppMenuBar: React.FC<AppMenuBarProps> = ({
             {/* Export Audio */}
             <button
               type="button"
-              disabled={!activeProject || readyCount === 0}
+              disabled={!activeProject || (!canExport && readyCount === 0)}
               onClick={() => {
                 closeMenu();
                 onOpenExport();
@@ -395,6 +401,22 @@ export const AppMenuBar: React.FC<AppMenuBarProps> = ({
               <div className="flex items-center gap-2">
                 <Users className="w-3.5 h-3.5 text-purple-400" />
                 <span>Phân vai nhân vật (Casting)...</span>
+              </div>
+            </button>
+
+            <div className="my-1 border-t border-zinc-800/80" />
+
+            <button
+              type="button"
+              onClick={() => {
+                closeMenu();
+                if (onOpenSettings) onOpenSettings();
+              }}
+              className="w-full px-2.5 py-1.5 rounded-lg text-left text-xs flex items-center justify-between hover:bg-zinc-800 hover:text-white transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <Settings2 className="w-3.5 h-3.5 text-amber-400" />
+                <span>Thiết lập...</span>
               </div>
             </button>
           </div>
@@ -546,7 +568,7 @@ export const AppMenuBar: React.FC<AppMenuBarProps> = ({
             <button
               type="button"
               onClick={() => {
-                setWaveformZoom(Math.min(WAVEFORM_ZOOM_MAX, waveformZoom + 15));
+                setWaveformZoom(stepWaveformZoom(waveformZoom, 1));
               }}
               className="w-full px-2.5 py-1.5 rounded-lg text-left text-xs flex items-center justify-between hover:bg-zinc-800 hover:text-white transition-colors"
             >
@@ -560,7 +582,7 @@ export const AppMenuBar: React.FC<AppMenuBarProps> = ({
             <button
               type="button"
               onClick={() => {
-                setWaveformZoom(Math.max(WAVEFORM_ZOOM_MIN, waveformZoom - 15));
+                setWaveformZoom(stepWaveformZoom(waveformZoom, -1));
               }}
               className="w-full px-2.5 py-1.5 rounded-lg text-left text-xs flex items-center justify-between hover:bg-zinc-800 hover:text-white transition-colors"
             >

@@ -32,6 +32,8 @@ import { SplitChapterModal } from "@/components/studio/SplitChapterModal";
 import { FindReplaceModal } from "@/components/studio/FindReplaceModal";
 import { InsertParagraphModal } from "@/components/studio/InsertParagraphModal";
 import { ShortcutsModal } from "@/components/studio/ShortcutsModal";
+import { TextTagsModal } from "@/components/studio/TextTagsModal";
+import { SettingsModal } from "@/components/studio/SettingsModal";
 import { ConfirmModal } from "@/components/studio/ConfirmModal";
 import { ProjectCard } from "@/components/studio/ProjectCard";
 import { useTtsHealth } from "@/hooks/useTtsHealth";
@@ -73,6 +75,8 @@ export default function Home() {
   const [isSplitChapterOpen, setIsSplitChapterOpen] = useState(false);
   const [isInsertParagraphOpen, setIsInsertParagraphOpen] = useState(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [isTextTagsOpen, setIsTextTagsOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [visibleCardCount, setVisibleCardCount] = useState(12);
   const [sortKey, setSortKey] = useState<"updated_at" | "title" | "progress_asc" | "progress_desc">("updated_at");
@@ -149,9 +153,11 @@ export default function Home() {
       const chaps = await tauriGetChapters(project.id);
       setChapters(chaps);
 
-      if (chaps.length > 0) {
-        setActiveChapter(chaps[0]);
-        const sents = await tauriGetSentences(chaps[0].id);
+      // Default to the first enabled chapter (skip disabled ones)
+      const firstChapter = chaps.find((c) => c.is_enabled !== false) ?? null;
+      if (firstChapter) {
+        setActiveChapter(firstChapter);
+        const sents = await tauriGetSentences(firstChapter.id);
         setSentences(sents);
         if (sents.length > 0) {
           setSelectedSentenceId(sents[0].id);
@@ -236,6 +242,13 @@ export default function Home() {
       if (e.key === "F1") {
         e.preventDefault();
         setIsShortcutsOpen(true);
+        return;
+      }
+
+      // F2: toggle text tags panel
+      if (e.key === "F2") {
+        e.preventDefault();
+        setIsTextTagsOpen((prev) => !prev);
         return;
       }
 
@@ -340,6 +353,7 @@ export default function Home() {
           onOpenSplitChapter={() => setIsSplitChapterOpen(true)}
           onOpenInsertModal={() => setIsInsertParagraphOpen(true)}
           onOpenShortcutsHelp={() => setIsShortcutsOpen(true)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenAbout={() =>
             alert(
               "BookStudio — Audiobook Production Studio\nPhiên bản Studio Edition\n\nTích hợp mô hình giọng đọc VieNeu-TTS, phân tách kịch bản thông minh & quản lý đa nhân vật."
@@ -770,6 +784,14 @@ export default function Home() {
       <ShortcutsModal
         isOpen={isShortcutsOpen}
         onClose={() => setIsShortcutsOpen(false)}
+      />
+      <TextTagsModal
+        isOpen={isTextTagsOpen}
+        onClose={() => setIsTextTagsOpen(false)}
+      />
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
       />
       <ConfirmModal />
     </div>

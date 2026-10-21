@@ -33,6 +33,9 @@ pub fn run() {
             let database = Database::new(db_path)
                 .map_err(|e| Box::<dyn std::error::Error>::from(e))?;
 
+            // Dọn file BGM / chỉnh sửa audio không còn được tham chiếu
+            commands::audio::cleanup_orphan_audio(&app_data_dir, &database);
+
             app.manage(Arc::new(database));
 
             // Set dynamic title bar window icon
@@ -60,6 +63,8 @@ pub fn run() {
             commands::audio::export_batch_chapters,
             commands::audio::read_audio_base64,
             commands::audio::cut_audio_region,
+            commands::audio::import_bgm_file,
+            commands::audio::shift_bgm_audio,
             commands::project::save_character,
             commands::project::get_project_characters,
             commands::project::delete_project_character,

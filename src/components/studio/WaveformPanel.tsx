@@ -20,20 +20,21 @@ import {
   Volume1,
   Plus,
   X,
+  MoveHorizontal,
 } from "lucide-react";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useStudioSettingsStore } from "@/stores/useStudioSettingsStore";
 import {
   tauriCutAudioRegion,
   tauriReadAudioBase64,
-  tauriSelectBgmFile,
+  tauriShiftBgmAudio,
+  tauriSelectChapterBgmFile,
   tauriUpdateChapterBgm,
 } from "@/lib/tauri";
 import {
   formatDuration,
   isBgmSentenceText,
-  WAVEFORM_ZOOM_MAX,
-  WAVEFORM_ZOOM_MIN,
+  stepWaveformZoom,
 } from "@/lib/utils";
 
 interface TrackVolumePopoverProps {
@@ -209,9 +210,26 @@ const TrackVolumePopover: React.FC<TrackVolumePopoverProps> = ({
   );
 };
 
+// Zoom is a percentage of "fit to view": 100 = the whole track fits (no scrolling),
+// higher values widen the track and give it its own horizontal scrollbar.
+function applyTrackZoom(ws: WaveSurfer | null, container: HTMLElement | null, zoomPercent: number) {
+  if (!ws || !container) return;
+  try {
+    const duration = ws.getDuration();
+    const width = container.clientWidth;
+    if (duration <= 0 || width <= 0) return;
+    ws.zoom((width / duration) * Math.max(1, zoomPercent / 100));
+  } catch {
+    // Ignore: audio may not be decoded yet
+  }
+}
+
 export const WaveformPanel: React.FC = () => {
   const voiceContainerRef = useRef<HTMLDivElement | null>(null);
   const bgmContainerRef = useRef<HTMLDivElement | null>(null);
+  // Each track keeps its own zoom level (percent of fit-to-view), changed by wheel while hovering it
+  const voiceZoomRef = useRef<number>(useStudioSettingsStore.getState().waveformZoom);
+  const bgmZoomRef = useRef<number>(useStudioSettingsStore.getState().waveformZoom);
 
   const voiceWsRef = useRef<WaveSurfer | null>(null);
   const bgmWsRef = useRef<WaveSurfer | null>(null);
@@ -263,6 +281,12 @@ export const WaveformPanel: React.FC = () => {
   } | null>(null);
   const [clipboardNotice, setClipboardNotice] = useState<string | null>(null);
 
+  // BGM move mode: drag the whole BGM track left/right to change where it starts
+  const [isBgmMoveMode, setIsBgmMoveMode] = useState(false);
+  const [bgmDragPx, setBgmDragPx] = useState<number | null>(null);
+  const [bgmDragSecs, setBgmDragSecs] = useState(0);
+  const bgmDragStartXRef = useRef<number | null>(null);
+
   const activeSentence = sentences.find((s) => s.id === selectedSentenceId);
 
   // Dòng nhạc nền chèn: nghe riêng, BGM tổng của chương không phát cùng (khi xuất nó tắt tiếng đoạn này)
@@ -309,7 +333,6 @@ export const WaveformPanel: React.FC = () => {
       barRadius: 2,
       height: 48,
       normalize: true,
-      minPxPerSec: waveformZoom,
       plugins: [regions],
     });
 
@@ -355,7 +378,7 @@ export const WaveformPanel: React.FC = () => {
     ws.on("ready", (dur) => {
       setVoiceTotalDuration(dur);
       try {
-        ws.zoom(waveformZoom);
+        applyTrackZoom(ws, voiceContainerRef.current, voiceZoomRef.current);
         if (playbackRateRef.current !== 1.0) {
           ws.setPlaybackRate(playbackRateRef.current);
         }
@@ -441,7 +464,6 @@ export const WaveformPanel: React.FC = () => {
       barRadius: 2,
       height: 48,
       normalize: true,
-      minPxPerSec: waveformZoom,
       plugins: [bgmRegions],
     });
 
@@ -483,11 +505,7 @@ export const WaveformPanel: React.FC = () => {
     bgmWs.on("ready", (dur) => {
       setBgmTotalDuration(dur);
       bgmWs.setVolume(isBgmMutedRef.current ? 0 : bgmVolumeRef.current);
-      try {
-        bgmWs.zoom(waveformZoom);
-      } catch {
-        // ignore
-      }
+      applyTrackZoom(bgmWs, bgmContainerRef.current, bgmZoomRef.current);
     });
 
     bgmWs.on("timeupdate", (time) => {
@@ -511,59 +529,59 @@ export const WaveformPanel: React.FC = () => {
     };
   }, []);
 
-  // Lăn chuột trên vùng sóng âm để zoom (lăn lên = phóng to, lăn xuống = thu nhỏ)
+  // Lăn chuột trên sóng âm nào thì chỉ zoom sóng âm đó (không cần chọn track), giữ nguyên điểm đang trỏ chuột.
+  // Giữ Shift + lăn chuột để cuộn ngang track đang phóng to.
   useEffect(() => {
-    const containers = [voiceContainerRef.current, bgmContainerRef.current].filter(
-      (el): el is HTMLDivElement => el !== null
+    const tracks = [
+      { container: voiceContainerRef.current, zoomRef: voiceZoomRef, getWs: () => voiceWsRef.current },
+      { container: bgmContainerRef.current, zoomRef: bgmZoomRef, getWs: () => bgmWsRef.current },
+    ].filter(
+      (t): t is {
+        container: HTMLDivElement;
+        zoomRef: React.MutableRefObject<number>;
+        getWs: () => WaveSurfer | null;
+      } => t.container !== null
     );
 
-    const handleWheel = (e: WheelEvent) => {
-      if (e.deltaY === 0) return;
-      e.preventDefault();
-      const { waveformZoom: current, setWaveformZoom: setZoom } =
-        useStudioSettingsStore.getState();
-      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-      const next = Math.min(
-        WAVEFORM_ZOOM_MAX,
-        Math.max(WAVEFORM_ZOOM_MIN, Math.round(current * factor))
-      );
-      // Đảm bảo luôn nhích ít nhất 1 đơn vị khi chưa chạm biên
-      const adjusted =
-        next === Math.round(current)
-          ? Math.min(
-              WAVEFORM_ZOOM_MAX,
-              Math.max(WAVEFORM_ZOOM_MIN, current + (e.deltaY < 0 ? 1 : -1))
-            )
-          : next;
-      if (adjusted !== current) setZoom(adjusted);
-    };
+    const cleanups = tracks.map(({ container, zoomRef, getWs }) => {
+      const handleWheel = (e: WheelEvent) => {
+        if (e.shiftKey || e.deltaY === 0) return;
+        e.preventDefault();
 
-    containers.forEach((el) => el.addEventListener("wheel", handleWheel, { passive: false }));
-    return () => {
-      containers.forEach((el) => el.removeEventListener("wheel", handleWheel));
-    };
+        const current = zoomRef.current;
+        const next = stepWaveformZoom(current, e.deltaY < 0 ? 1 : -1, 1.2);
+        if (next === current) return;
+
+        const ws = getWs();
+        const duration = ws?.getDuration() ?? 0;
+        const width = container.clientWidth;
+        const cursorX = e.clientX - container.getBoundingClientRect().left;
+        let anchorTime: number | null = null;
+        if (ws && duration > 0 && width > 0) {
+          const oldPxPerSec = (width / duration) * Math.max(1, current / 100);
+          anchorTime = (ws.getScroll() + cursorX) / oldPxPerSec;
+        }
+
+        zoomRef.current = next;
+        if (ws && anchorTime !== null && duration > 0 && width > 0) {
+          applyTrackZoom(ws, container, next);
+          const newPxPerSec = (width / duration) * Math.max(1, next / 100);
+          ws.setScroll(Math.max(0, anchorTime * newPxPerSec - cursorX));
+        }
+      };
+      container.addEventListener("wheel", handleWheel, { passive: false });
+      return () => container.removeEventListener("wheel", handleWheel);
+    });
+
+    return () => cleanups.forEach((fn) => fn());
   }, []);
 
-  // Áp dụng zoom lên cả 2 track khi waveformZoom thay đổi
+  // Menu Hiển thị → Phóng to / Thu nhỏ: đặt cùng một mức zoom cho cả 2 track
   useEffect(() => {
-    if (voiceWsRef.current) {
-      try {
-        if (voiceWsRef.current.getDuration() > 0) {
-          voiceWsRef.current.zoom(waveformZoom);
-        }
-      } catch {
-        // ignore
-      }
-    }
-    if (bgmWsRef.current) {
-      try {
-        if (bgmWsRef.current.getDuration() > 0) {
-          bgmWsRef.current.zoom(waveformZoom);
-        }
-      } catch {
-        // ignore
-      }
-    }
+    voiceZoomRef.current = waveformZoom;
+    bgmZoomRef.current = waveformZoom;
+    applyTrackZoom(voiceWsRef.current, voiceContainerRef.current, waveformZoom);
+    applyTrackZoom(bgmWsRef.current, bgmContainerRef.current, waveformZoom);
   }, [waveformZoom]);
 
   // Load Voice audio whenever active sentence changes or is regenerated
@@ -781,7 +799,7 @@ export const WaveformPanel: React.FC = () => {
 
   const handleSelectBgm = async () => {
     if (!activeChapter) return;
-    const file = await tauriSelectBgmFile();
+    const file = await tauriSelectChapterBgmFile();
     if (file) {
       await tauriUpdateChapterBgm({
         chapterId: activeChapter.id,
@@ -946,6 +964,59 @@ export const WaveformPanel: React.FC = () => {
     }
   };
 
+  // Convert a horizontal drag (px) on the BGM track into seconds using the real waveform width
+  const bgmPxToSecs = (px: number): number => {
+    const wrapper = bgmWsRef.current?.getWrapper();
+    const width = wrapper?.getBoundingClientRect().width ?? 0;
+    if (!wrapper || width <= 0 || bgmTotalDuration <= 0) return 0;
+    return px / (width / bgmTotalDuration);
+  };
+
+  const handleBgmMovePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!activeChapter?.bgm_path || bgmTotalDuration <= 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    bgmDragStartXRef.current = e.clientX;
+    setBgmDragPx(0);
+    setBgmDragSecs(0);
+  };
+
+  const handleBgmMovePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (bgmDragStartXRef.current === null) return;
+    const dx = e.clientX - bgmDragStartXRef.current;
+    setBgmDragPx(dx);
+    setBgmDragSecs(bgmPxToSecs(dx));
+  };
+
+  const handleBgmMovePointerUp = async (e: React.PointerEvent<HTMLDivElement>) => {
+    const startX = bgmDragStartXRef.current;
+    bgmDragStartXRef.current = null;
+    setBgmDragPx(null);
+    if (startX === null || !activeChapter?.bgm_path) return;
+
+    const offsetSecs = bgmPxToSecs(e.clientX - startX);
+    if (Math.abs(offsetSecs) < 0.05) return;
+
+    try {
+      const res = await tauriShiftBgmAudio({
+        chapterId: activeChapter.id,
+        filePath: activeChapter.bgm_path,
+        bgmVolume,
+        offsetSecs,
+      });
+      updateChapterBgm(activeChapter.id, res.path, bgmVolume);
+      voiceRegionsRef.current?.clearRegions();
+      bgmRegionsRef.current?.clearRegions();
+      setSelectedRegion(null);
+      setClipboardNotice(
+        `Đã dời BGM ${offsetSecs > 0 ? "trễ" : "sớm"} ${Math.abs(offsetSecs).toFixed(2)}s`
+      );
+      setTimeout(() => setClipboardNotice(null), 2500);
+    } catch (err) {
+      setClipboardNotice(`Không dời được BGM: ${String(err)}`);
+      setTimeout(() => setClipboardNotice(null), 3500);
+    }
+  };
+
   const handlePlaySelection = () => {
     if (!selectedRegion) return;
     if (selectedRegion.target === "voice" && voiceWsRef.current) {
@@ -1067,6 +1138,21 @@ export const WaveformPanel: React.FC = () => {
               <span>Hủy chọn</span>
             </button>
           )}
+
+          {/* Button [Dời BGM]: kéo thả cả track nhạc nền */}
+          <button
+            onClick={() => setIsBgmMoveMode((prev) => !prev)}
+            disabled={!activeChapter?.bgm_path}
+            className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] transition-colors disabled:opacity-30 ${
+              isBgmMoveMode
+                ? "bg-emerald-900/60 border-emerald-500/60 text-emerald-200"
+                : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
+            }`}
+            title="Bật để kéo thả dời cả track nhạc nền sang trái / phải"
+          >
+            <MoveHorizontal className="w-3 h-3 text-emerald-400" />
+            <span>Dời BGM</span>
+          </button>
 
           {/* Audacity-style Selection Tools */}
           <div className="flex items-center gap-1 ml-1">
@@ -1384,7 +1470,28 @@ export const WaveformPanel: React.FC = () => {
               ref={bgmContainerRef}
               data-empty={!activeChapter?.bgm_path}
               className="w-full"
+              style={bgmDragPx !== null ? { transform: `translateX(${bgmDragPx}px)`, opacity: 0.7 } : undefined}
             />
+            {isBgmMoveMode && Boolean(activeChapter?.bgm_path) && (
+              <div
+                onPointerDown={handleBgmMovePointerDown}
+                onPointerMove={handleBgmMovePointerMove}
+                onPointerUp={handleBgmMovePointerUp}
+                onPointerCancel={() => {
+                  bgmDragStartXRef.current = null;
+                  setBgmDragPx(null);
+                }}
+                className="absolute inset-0 z-20 cursor-grab active:cursor-grabbing border border-dashed border-emerald-500/50 bg-emerald-500/5"
+                title="Kéo sang phải để BGM vào trễ hơn, sang trái để vào sớm hơn"
+              >
+                {bgmDragPx !== null && (
+                  <span className="absolute top-1 right-2 px-1.5 py-0.5 rounded bg-zinc-900/90 border border-emerald-500/40 text-[11px] font-mono text-emerald-300">
+                    {bgmDragSecs >= 0 ? "+" : ""}
+                    {bgmDragSecs.toFixed(2)}s
+                  </span>
+                )}
+              </div>
+            )}
             {!activeChapter?.bgm_path && (
               <div className="absolute inset-0 flex items-center justify-center text-xs text-zinc-600">
                 <button

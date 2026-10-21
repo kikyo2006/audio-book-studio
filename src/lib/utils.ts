@@ -49,6 +49,16 @@ export function isBgmSentenceText(text: string | undefined | null): boolean {
   return (text ?? "").startsWith("[Nhạc nền:");
 }
 
-// Giới hạn zoom sóng âm (pixel / giây), dùng chung cho lăn chuột và menu
-export const WAVEFORM_ZOOM_MIN = 10;
-export const WAVEFORM_ZOOM_MAX = 300;
+// Zoom sóng âm theo phần trăm so với mức vừa khít khung (100 = thấy trọn cả track, không cần cuộn).
+// Dùng chung cho lăn chuột và menu; càng phóng to thì mỗi track càng có thanh cuộn ngang riêng.
+export const WAVEFORM_ZOOM_MIN = 100;
+export const WAVEFORM_ZOOM_MAX = 6400;
+
+/** Tăng / giảm mức zoom một nấc (direction > 0 = phóng to), luôn nhích ít nhất 1 đơn vị khi chưa chạm biên. */
+export function stepWaveformZoom(current: number, direction: 1 | -1, factor = 1.25): number {
+  const safe = Math.min(WAVEFORM_ZOOM_MAX, Math.max(WAVEFORM_ZOOM_MIN, current || WAVEFORM_ZOOM_MIN));
+  const raw = direction > 0 ? safe * factor : safe / factor;
+  const next = Math.round(raw);
+  const adjusted = next === Math.round(safe) ? safe + direction : next;
+  return Math.min(WAVEFORM_ZOOM_MAX, Math.max(WAVEFORM_ZOOM_MIN, adjusted));
+}

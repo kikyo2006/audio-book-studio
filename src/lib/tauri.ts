@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { useStudioSettingsStore, DEFAULT_PUNCTUATION_PAUSES } from "@/stores/useStudioSettingsStore";
+import type { PunctuationPauseSettings } from "@/stores/useStudioSettingsStore";
 import type {
   CastingPreset,
   ChapterItem,
@@ -158,6 +160,15 @@ export async function tauriCheckTtsConnection(serverUrl: string): Promise<boolea
   return await invoke<boolean>("check_tts_connection", { serverUrl: normalizedUrl });
 }
 
+// Punctuation pause settings sent with every TTS request (all zeros = feature off)
+function getPunctuationPausesPayload(): PunctuationPauseSettings {
+  const { punctuationPauseEnabled, punctuationPauses } = useStudioSettingsStore.getState();
+  if (!punctuationPauseEnabled) {
+    return { comma: 0, semicolon: 0, colon: 0, dash: 0, period: 0, question: 0, exclamation: 0, ellipsis: 0 };
+  }
+  return { ...DEFAULT_PUNCTUATION_PAUSES, ...punctuationPauses };
+}
+
 export async function tauriSynthesizeSentence(params: {
   sentenceId: string;
   projectId: string;
@@ -170,7 +181,10 @@ export async function tauriSynthesizeSentence(params: {
   if (!isTauriEnvironment()) {
     throw new Error("TTS chỉ có thể chạy thông qua backend Tauri");
   }
-  return await invoke<TtsSentenceResult>("synthesize_sentence", params);
+  return await invoke<TtsSentenceResult>("synthesize_sentence", {
+    ...params,
+    punctuationPauses: getPunctuationPausesPayload(),
+  });
 }
 
 export async function tauriRegenerateSentence(params: {
@@ -185,7 +199,10 @@ export async function tauriRegenerateSentence(params: {
   if (!isTauriEnvironment()) {
     throw new Error("Tái tạo âm thanh chỉ có thể chạy qua backend Tauri");
   }
-  return await invoke<TtsSentenceResult>("regenerate_sentence", params);
+  return await invoke<TtsSentenceResult>("regenerate_sentence", {
+    ...params,
+    punctuationPauses: getPunctuationPausesPayload(),
+  });
 }
 
 export async function tauriExportChapterAudio(params: {
@@ -219,6 +236,7 @@ export async function tauriExportBookAudio(params: {
   chapterPauseMs: number;
   mixBgm?: boolean;
   bgmVolume?: number;
+  chapterIds?: string[];
 }): Promise<number> {
   if (!isTauriEnvironment()) {
     throw new Error("Xuất audio cần backend Tauri");
@@ -231,6 +249,7 @@ export async function tauriExportBookAudio(params: {
     chapterPauseMs: params.chapterPauseMs,
     mixBgm: params.mixBgm ?? false,
     bgmVolume: params.bgmVolume ?? null,
+    chapterIds: params.chapterIds ?? null,
   });
 }
 
@@ -320,6 +339,23 @@ export async function tauriCutAudioRegion(params: {
     bgmVolume: params.bgmVolume ?? null,
     startSecs: params.startSecs,
     endSecs: params.endSecs,
+  });
+}
+
+export async function tauriShiftBgmAudio(params: {
+  chapterId: string;
+  filePath: string;
+  bgmVolume?: number | null;
+  offsetSecs: number;
+}): Promise<{ path: string; duration: number }> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Dời BGM cần backend Tauri");
+  }
+  return await invoke<{ path: string; duration: number }>("shift_bgm_audio", {
+    chapterId: params.chapterId,
+    filePath: params.filePath,
+    bgmVolume: params.bgmVolume ?? null,
+    offsetSecs: params.offsetSecs,
   });
 }
 
@@ -676,6 +712,13 @@ export async function tauriInsertBlankSentences(params: {
     position: params.position,
     count: params.count,
   });
+}
+
+// Pick a chapter BGM file and copy it into the app data folder so it no longer depends on the original file
+export async function tauriSelectChapterBgmFile(): Promise<string | null> {
+  const picked = await tauriSelectBgmFile();
+  if (!picked) return null;
+  return await invoke<string>("import_bgm_file", { sourcePath: picked });
 }
 
 export async function tauriSelectBgmFile(): Promise<string | null> {

@@ -547,6 +547,50 @@ pub fn remove_region_to_wav(
     Ok(written as f64 / sr as f64)
 }
 
+/// Dời toàn bộ audio theo `offset_secs`: dương = chèn khoảng lặng ở đầu, âm = bỏ bớt phần đầu.
+/// Ghi ra WAV mono 16-bit mới, trả về độ dài mới (giây).
+pub fn shift_audio_to_wav(
+    source_path: &Path,
+    output_path: &Path,
+    offset_secs: f64,
+) -> Result<f64, String> {
+    let (samples, sr) = decode_audio_file(source_path)?;
+    if samples.is_empty() || sr == 0 {
+        return Err("File audio không chứa dữ liệu hợp lệ.".to_string());
+    }
+    let shift_frames = (offset_secs.abs() * sr as f64).round() as usize;
+    if shift_frames == 0 {
+        return Err("Độ dời quá nhỏ.".to_string());
+    }
+    if offset_secs < 0.0 && shift_frames >= samples.len() {
+        return Err("Dời quá xa, sẽ mất toàn bộ audio.".to_string());
+    }
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: sr,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(output_path, spec)
+        .map_err(|e| format!("Lỗi tạo file WAV: {}", e))?;
+    let mut written = 0usize;
+    let body: &[f32] = if offset_secs < 0.0 { &samples[shift_frames..] } else { &samples };
+    if offset_secs > 0.0 {
+        for _ in 0..shift_frames {
+            writer.write_sample(0i16).map_err(|e| e.to_string())?;
+            written += 1;
+        }
+    }
+    for &v in body {
+        let q = (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        writer.write_sample(q).map_err(|e| e.to_string())?;
+        written += 1;
+    }
+    writer.finalize().map_err(|e| format!("Lỗi hoàn tất file WAV: {}", e))?;
+    Ok(written as f64 / sr as f64)
+}
+
 pub fn generate_silence_wav(output_path: &Path, duration_secs: f64) -> Result<(), String> {
     if let Some(parent) = output_path.parent() {
         let _ = std::fs::create_dir_all(parent);

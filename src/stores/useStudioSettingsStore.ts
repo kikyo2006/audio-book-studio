@@ -41,6 +41,29 @@ export const VOICE_PRESETS: VoicePreset[] = [
   },
 ];
 
+export interface PunctuationPauseSettings {
+  comma: number;
+  semicolon: number;
+  colon: number;
+  dash: number;
+  period: number;
+  question: number;
+  exclamation: number;
+  ellipsis: number;
+}
+
+// Natural-sounding pauses (ms) for punctuation inside a sentence. 0 = disabled.
+export const DEFAULT_PUNCTUATION_PAUSES: PunctuationPauseSettings = {
+  comma: 250,
+  semicolon: 400,
+  colon: 400,
+  dash: 300,
+  period: 600,
+  question: 600,
+  exclamation: 500,
+  ellipsis: 700,
+};
+
 interface StudioSettingsState {
   serverUrl: string;
   selectedVoice: string;
@@ -52,6 +75,8 @@ interface StudioSettingsState {
   waveformZoom: number;
   sentencePauseMs: number;
   paragraphPauseMs: number;
+  punctuationPauseEnabled: boolean;
+  punctuationPauses: PunctuationPauseSettings;
 
   // Thiết lập vai hệ thống trong CharacterModal (lưu lại để không bị reset về mặc định)
   narratorSpeed: number;
@@ -70,6 +95,9 @@ interface StudioSettingsState {
   setWaveformZoom: (zoom: number) => void;
   setSentencePauseMs: (ms: number) => void;
   setParagraphPauseMs: (ms: number) => void;
+  setPunctuationPauseEnabled: (enabled: boolean) => void;
+  setPunctuationPause: (key: keyof PunctuationPauseSettings, ms: number) => void;
+  resetPunctuationPauses: () => void;
   setRoleSettings: (
     settings: Partial<
       Pick<
@@ -94,9 +122,11 @@ export const useStudioSettingsStore = create<StudioSettingsState>()(
       temperature: 0.45,
       isServerOnline: false,
       continuousPlay: true,
-      waveformZoom: 35,
+      waveformZoom: 100,
       sentencePauseMs: 350,
       paragraphPauseMs: 750,
+      punctuationPauseEnabled: true,
+      punctuationPauses: { ...DEFAULT_PUNCTUATION_PAUSES },
       narratorSpeed: 1.0,
       narratorTemperature: 0.45,
       dialogueSpeed: 1.0,
@@ -113,6 +143,19 @@ export const useStudioSettingsStore = create<StudioSettingsState>()(
       setWaveformZoom: (waveformZoom) => set({ waveformZoom }),
       setSentencePauseMs: (sentencePauseMs) => set({ sentencePauseMs }),
       setParagraphPauseMs: (paragraphPauseMs) => set({ paragraphPauseMs }),
+      setPunctuationPauseEnabled: (punctuationPauseEnabled) => set({ punctuationPauseEnabled }),
+      setPunctuationPause: (key, ms) =>
+        set((state) => ({
+          punctuationPauses: {
+            ...state.punctuationPauses,
+            [key]: Math.max(0, Math.min(10000, Math.round(Number.isFinite(ms) ? ms : 0))),
+          },
+        })),
+      resetPunctuationPauses: () =>
+        set({
+          punctuationPauseEnabled: true,
+          punctuationPauses: { ...DEFAULT_PUNCTUATION_PAUSES },
+        }),
       setRoleSettings: (settings) => set(settings),
     }),
     {
@@ -132,6 +175,8 @@ export const useStudioSettingsStore = create<StudioSettingsState>()(
         waveformZoom: state.waveformZoom,
         sentencePauseMs: state.sentencePauseMs,
         paragraphPauseMs: state.paragraphPauseMs,
+        punctuationPauseEnabled: state.punctuationPauseEnabled,
+        punctuationPauses: state.punctuationPauses,
         narratorSpeed: state.narratorSpeed,
         narratorTemperature: state.narratorTemperature,
         dialogueSpeed: state.dialogueSpeed,

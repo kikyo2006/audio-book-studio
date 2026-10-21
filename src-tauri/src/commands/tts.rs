@@ -5,7 +5,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::db::Database;
 use crate::services::tts::{
     check_tts_health, get_sentence_audio_cache_path, synthesize_to_file,
-    TtsSentenceResult, TtsSynthesizeRequest,
+    PunctuationPauses, TtsSentenceResult, TtsSynthesizeRequest,
 };
 
 #[tauri::command]
@@ -22,6 +22,7 @@ pub async fn synthesize_sentence(
     speed: f32,
     temperature: Option<f32>,
     server_url: String,
+    punctuation_pauses: Option<PunctuationPauses>,
     app_handle: AppHandle,
     db: State<'_, Arc<Database>>,
 ) -> Result<TtsSentenceResult, String> {
@@ -64,7 +65,7 @@ pub async fn synthesize_sentence(
         temperature,
     };
 
-    let duration = synthesize_to_file(&server_url, &req, &audio_path).await?;
+    let duration = synthesize_to_file(&server_url, &req, &audio_path, punctuation_pauses.as_ref()).await?;
     let audio_path_str = audio_path.to_string_lossy().to_string();
 
     let db_clone = db.inner().clone();
@@ -101,6 +102,7 @@ pub async fn regenerate_sentence(
     speed: f32,
     temperature: Option<f32>,
     server_url: String,
+    punctuation_pauses: Option<PunctuationPauses>,
     app_handle: AppHandle,
     db: State<'_, Arc<Database>>,
 ) -> Result<TtsSentenceResult, String> {
@@ -112,6 +114,7 @@ pub async fn regenerate_sentence(
         speed,
         temperature,
         server_url,
+        punctuation_pauses,
         app_handle,
         db,
     )

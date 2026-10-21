@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   X,
   Download,
@@ -21,7 +21,7 @@ import {
   tauriExportChapterAudio,
   tauriExportBookAudio,
   tauriExportBatchChapters,
-  tauriSelectBgmFile,
+  tauriSelectChapterBgmFile,
   tauriSelectDirectory,
   tauriSelectSaveAudioFile,
   tauriUpdateChapterBgm,
@@ -65,6 +65,43 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     .trim()
     .replace(/[/\\:*?"<>|]/g, "_");
 
+  // Chương đã đọc xong 100% (đủ điều kiện để nối vào file master)
+  const completedChapters = useMemo(
+    () =>
+      chapters.filter(
+        (c) =>
+          c.is_enabled !== false &&
+          c.sentence_count > 0 &&
+          c.ready_sentence_count >= c.sentence_count
+      ),
+    [chapters]
+  );
+  const [selectedMergeChapterIds, setSelectedMergeChapterIds] = useState<string[]>([]);
+
+  // Mặc định chọn hết chương hoàn chỉnh; giữ lại lựa chọn cũ nếu chương vẫn còn hợp lệ
+  useEffect(() => {
+    setSelectedMergeChapterIds((prev) => {
+      const validIds = new Set(completedChapters.map((c) => c.id));
+      const kept = prev.filter((id) => validIds.has(id));
+      const known = new Set(prev);
+      const added = completedChapters.filter((c) => !known.has(c.id)).map((c) => c.id);
+      return [...kept, ...added];
+    });
+  }, [completedChapters]);
+
+  const allCompletedSelected =
+    completedChapters.length > 0 && selectedMergeChapterIds.length === completedChapters.length;
+
+  const handleToggleSelectAllChapters = () => {
+    setSelectedMergeChapterIds(allCompletedSelected ? [] : completedChapters.map((c) => c.id));
+  };
+
+  const handleToggleMergeChapter = (id: string) => {
+    setSelectedMergeChapterIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
   // Khởi tạo đường dẫn mặc định theo Scope
   useEffect(() => {
     if (exportScope === "chapter") {
@@ -94,7 +131,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
 
   const handleSelectBgm = async () => {
     if (!activeChapter) return;
-    const file = await tauriSelectBgmFile();
+    const file = await tauriSelectChapterBgmFile();
     if (file) {
       await tauriUpdateChapterBgm({
         chapterId: activeChapter.id,
@@ -159,8 +196,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
           `Xuất chương "${activeChapter.title}" (${modeText}) thành công! Thời lượng: ${Math.round(duration)} giây.`
         );
       } else if (exportScope === "all_merged") {
-        if (readyChapters.length === 0) {
-          setExportMessage("Chưa có chương nào có câu thoại sẵn sàng để xuất!");
+        if (selectedMergeChapterIds.length === 0) {
+          setExportMessage("Vui lòng chọn ít nhất 1 chương đã đọc xong để nối!");
           setIsExporting(false);
           return;
         }
@@ -168,6 +205,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
         const duration = await tauriExportBookAudio({
           projectId: activeProject.id,
           outputPath,
+          chapterIds: selectedMergeChapterIds,
           sentencePauseMs,
           paragraphPauseMs,
           chapterPauseMs,
@@ -176,7 +214,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
         });
 
         setExportMessage(
-          `Nối toàn bộ ${readyChapters.length} chương thành 1 file Audio Master thành công! Tổng thời lượng: ${Math.round(duration)} giây (~${Math.round(duration / 60)} phút).`
+          `Nối ${selectedMergeChapterIds.length} chương thành 1 file Audio Master thành công! Tổng thời lượng: ${Math.round(duration)} giây (~${Math.round(duration / 60)} phút).`
         );
       } else if (exportScope === "all_batch") {
         if (readyChapters.length === 0) {
@@ -212,8 +250,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     (readySentences.length === 0 || activeChapter?.is_enabled === false);
 
   const isScopeBookDisabled =
-    (exportScope === "all_merged" || exportScope === "all_batch") &&
-    readyChapters.length === 0;
+    (exportScope === "all_merged" && selectedMergeChapterIds.length === 0) ||
+    (exportScope === "all_batch" && readyChapters.length === 0);
 
   const isExportButtonDisabled =
     isExporting || isScopeChapterDisabled || isScopeBookDisabled;
@@ -243,7 +281,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
         <div className="p-5 space-y-4 text-xs max-h-[80vh] overflow-y-auto">
           {/* Scope Selection: 3 Tùy Chọn */}
           <div className="space-y-1.5">
-            <label className="font-semibold text-zinc-300">Phạm Vi Xuất Bản</label>
+            <label className="block mb-2.5 font-semibold text-zinc-300">Phạm Vi Xuất Bản</label>
             <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
@@ -324,6 +362,52 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
             </span>
           </div>
 
+          {/* Chọn chương để nối (chỉ chương đã đọc xong 100%) */}
+          {exportScope === "all_merged" && (
+            <div className="p-3 bg-zinc-950 border border-zinc-800 rounded-lg space-y-2 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-300 font-medium">
+                  Chọn chương để nối ({selectedMergeChapterIds.length}/{completedChapters.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={handleToggleSelectAllChapters}
+                  disabled={completedChapters.length === 0}
+                  className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-medium disabled:opacity-40 transition-colors"
+                >
+                  {allCompletedSelected ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+                </button>
+              </div>
+
+              {completedChapters.length === 0 ? (
+                <p className="text-[11px] text-amber-400">
+                  Chưa có chương nào đọc xong 100% để nối.
+                </p>
+              ) : (
+                <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
+                  {completedChapters.map((c) => (
+                    <label
+                      key={c.id}
+                      className="flex items-center gap-2 py-1 px-2 rounded bg-zinc-900/60 border border-zinc-800/60 hover:bg-zinc-800/60 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedMergeChapterIds.includes(c.id)}
+                        onChange={() => handleToggleMergeChapter(c.id)}
+                        className="w-3.5 h-3.5 accent-indigo-500 cursor-pointer shrink-0"
+                      />
+                      <span className="text-zinc-500 font-mono text-[11px] shrink-0">#{c.index}</span>
+                      <span className="text-zinc-200 truncate">{c.title}</span>
+                      <span className="ml-auto text-[10px] text-emerald-400 shrink-0">
+                        {c.ready_sentence_count}/{c.sentence_count}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Cảnh báo nếu chương đang bị tắt (chỉ ở mode chapter) */}
           {exportScope === "chapter" && activeChapter?.is_enabled === false && (
             <div className="p-3 rounded-lg bg-amber-950/30 border border-amber-800/60 text-amber-300 flex items-start gap-2.5">
@@ -338,7 +422,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
           )}
 
           {/* Cảnh báo nếu chưa có chương nào sẵn sàng (ở mode all_merged hoặc all_batch) */}
-          {exportScope !== "chapter" && readyChapters.length === 0 && (
+          {exportScope === "all_batch" && readyChapters.length === 0 && (
             <div className="p-3 rounded-lg bg-amber-950/30 border border-amber-800/60 text-amber-300 flex items-start gap-2.5">
               <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
               <div>
@@ -352,7 +436,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
 
           {/* Mode Selection: Voice Only vs Voice + BGM */}
           <div className="space-y-2">
-            <label className="font-medium text-zinc-300">Tùy Chọn Âm Thanh</label>
+            <label className="block mb-2.5 font-medium text-zinc-300">Tùy Chọn Âm Thanh</label>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
@@ -476,7 +560,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
 
           {/* Formats */}
           <div className="space-y-2">
-            <label className="font-medium text-zinc-300">Định Dạng Âm Thanh</label>
+            <label className="block mb-2.5 font-medium text-zinc-300">Định Dạng Âm Thanh</label>
             <div className="grid grid-cols-3 gap-2">
               {[
                 { id: "wav", name: "WAV Master", desc: "Lossless 48kHz 16-bit PCM" },

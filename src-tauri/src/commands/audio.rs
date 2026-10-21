@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::db::Database;
 use crate::services::audio::{item_kind_from_text, AudioConcatenateOptions, ItemKind};
@@ -97,16 +97,22 @@ pub async fn export_book_audio(
     chapter_pause_ms: u32,
     mix_bgm: Option<bool>,
     bgm_volume: Option<f32>,
+    chapter_ids: Option<Vec<String>>,
     db: State<'_, Arc<Database>>,
 ) -> Result<f64, String> {
     let db = db.inner().clone();
 
     tokio::task::spawn_blocking(move || {
         let chapters = db.get_chapters(&project_id)?;
-        let enabled_chapters: Vec<_> = chapters.into_iter().filter(|c| c.is_enabled).collect();
+        // Chỉ nối các chương được chọn (None = tất cả chương đang bật)
+        let enabled_chapters: Vec<_> = chapters
+            .into_iter()
+            .filter(|c| c.is_enabled)
+            .filter(|c| chapter_ids.as_ref().map_or(true, |ids| ids.contains(&c.id)))
+            .collect();
 
         if enabled_chapters.is_empty() {
-            return Err("Không có chương nào đang được kích hoạt (bật) để xuất.".to_string());
+            return Err("Không có chương nào được chọn (và đang bật) để xuất.".to_string());
         }
 
         let temp_dir = std::env::temp_dir().join(format!("book_studio_export_{}", uuid::Uuid::new_v4()));
@@ -312,6 +318,99 @@ pub async fn export_batch_chapters(
     .map_err(|e| format!("Task export hàng loạt lỗi: {}", e))?
 }
 
+fn app_data_dir_of(app_handle: &AppHandle) -> PathBuf {
+    app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("./data"))
+}
+
+fn norm_path(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "/").to_lowercase()
+}
+
+/// Xóa file nếu nó nằm trong thư mục dữ liệu của app (audio_cache / bgm), không bao giờ đụng file của người dùng.
+fn remove_if_app_owned(app_handle: &AppHandle, path: &Path) {
+    let app_dir = app_data_dir_of(app_handle);
+    let p = norm_path(path);
+    let owned = [app_dir.join("audio_cache"), app_dir.join("bgm")]
+        .iter()
+        .any(|d| p.starts_with(&format!("{}/", norm_path(d))));
+    if owned {
+        let _ = fs::remove_file(path);
+    }
+}
+
+/// Dọn file chỉnh sửa / BGM đã copy mà không còn dòng DB nào tham chiếu (chạy lúc khởi động app).
+pub fn cleanup_orphan_audio(app_data_dir: &Path, db: &Database) {
+    let Ok(referenced) = db.get_referenced_audio_paths() else {
+        return;
+    };
+    let referenced: std::collections::HashSet<String> =
+        referenced.iter().map(|p| norm_path(Path::new(p))).collect();
+
+    for dir in [app_data_dir.join("audio_cache").join("edits"), app_data_dir.join("bgm")] {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && !referenced.contains(&norm_path(&path)) {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+}
+
+/// Copy file nhạc nền người dùng chọn vào thư mục dữ liệu của app để không phụ thuộc file gốc.
+#[tauri::command]
+pub async fn import_bgm_file(
+    source_path: String,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    let dir = app_data_dir_of(&app_handle).join("bgm");
+
+    tokio::task::spawn_blocking(move || {
+        let source = PathBuf::from(&source_path);
+        if !source.is_file() {
+            return Err(format!("Không tìm thấy file nhạc nền: {}", source_path));
+        }
+        fs::create_dir_all(&dir).map_err(|e| format!("Không tạo được thư mục BGM: {}", e))?;
+
+        let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("bgm");
+        let ext = source.extension().and_then(|s| s.to_str()).unwrap_or("wav");
+        let target = dir.join(format!(
+            "{}_{}.{}",
+            stem,
+            &uuid::Uuid::new_v4().simple().to_string()[..8],
+            ext
+        ));
+        fs::copy(&source, &target).map_err(|e| format!("Không copy được file nhạc nền: {}", e))?;
+        Ok(target.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("Task copy BGM lỗi: {}", e))?
+}
+
+/// Đường dẫn file dẫn xuất (`<tên gốc>_<tag>_<8 ký tự>.wav`) nằm trong thư mục dữ liệu của app,
+/// không ghi vào thư mục chứa file nguồn của người dùng. Không cộng dồn hậu tố cũ.
+fn derived_wav_path(app_handle: &AppHandle, source: &Path, tag: &str) -> PathBuf {
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("./data"));
+    let dir = app_dir.join("audio_cache").join("edits");
+    let _ = fs::create_dir_all(&dir);
+
+    let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("audio");
+    let stem = stem.split("_cut_").next().unwrap_or(stem);
+    let stem = stem.split("_shift_").next().unwrap_or(stem);
+    dir.join(format!(
+        "{}_{}_{}.wav",
+        stem,
+        tag,
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    ))
+}
+
 #[derive(serde::Serialize)]
 pub struct CutRegionResult {
     pub path: String,
@@ -328,6 +427,7 @@ pub async fn cut_audio_region(
     bgm_volume: Option<f64>,
     start_secs: f64,
     end_secs: f64,
+    app_handle: AppHandle,
     db: State<'_, Arc<Database>>,
 ) -> Result<CutRegionResult, String> {
     let db = db.inner().clone();
@@ -344,13 +444,7 @@ pub async fn cut_audio_region(
             return Err(format!("Không tìm thấy file audio: {}", source.display()));
         }
 
-        let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("audio");
-        let stem = stem.split("_cut_").next().unwrap_or(stem);
-        let output = source.with_file_name(format!(
-            "{}_cut_{}.wav",
-            stem,
-            &uuid::Uuid::new_v4().simple().to_string()[..8]
-        ));
+        let output = derived_wav_path(&app_handle, &source, "cut");
 
         let duration =
             crate::services::audio::remove_region_to_wav(&source, &output, start_secs, end_secs)?;
@@ -361,11 +455,43 @@ pub async fn cut_audio_region(
         } else {
             db.update_chapter_bgm(&id, Some(out_str.clone()), bgm_volume)?;
         }
+        // File cũ không còn dùng nữa: xóa nếu do app tạo ra (không đụng file gốc của người dùng)
+        remove_if_app_owned(&app_handle, &source);
 
         Ok(CutRegionResult { path: out_str, duration })
     })
     .await
     .map_err(|e| format!("Task cắt audio lỗi: {}", e))?
+}
+
+/// Dời toàn bộ nhạc nền của chương: `offset_secs` dương = trễ hơn (chèn lặng đầu), âm = sớm hơn (bỏ đầu).
+/// File gốc được giữ nguyên, kết quả ghi ra file mới rồi cập nhật BGM chương.
+#[tauri::command]
+pub async fn shift_bgm_audio(
+    chapter_id: String,
+    file_path: String,
+    bgm_volume: Option<f64>,
+    offset_secs: f64,
+    app_handle: AppHandle,
+    db: State<'_, Arc<Database>>,
+) -> Result<CutRegionResult, String> {
+    let db = db.inner().clone();
+
+    tokio::task::spawn_blocking(move || {
+        let source = PathBuf::from(&file_path);
+        if !source.exists() {
+            return Err(format!("Không tìm thấy file audio: {}", source.display()));
+        }
+        let output = derived_wav_path(&app_handle, &source, "shift");
+        let duration =
+            crate::services::audio::shift_audio_to_wav(&source, &output, offset_secs)?;
+        let out_str = output.to_string_lossy().to_string();
+        db.update_chapter_bgm(&chapter_id, Some(out_str.clone()), bgm_volume)?;
+        remove_if_app_owned(&app_handle, &source);
+        Ok(CutRegionResult { path: out_str, duration })
+    })
+    .await
+    .map_err(|e| format!("Task dời BGM lỗi: {}", e))?
 }
 
 #[tauri::command]

@@ -104,6 +104,201 @@ fn split_pause_segments(input: &str) -> Vec<TextSegment> {
     segments
 }
 
+/// Thời lượng ngắt nghỉ (ms) theo từng dấu câu nằm GIỮA câu. 0 = tắt (dấu đó đọc liền như bình thường).
+/// Dấu kết thúc cả câu không được tính, khoảng cách giữa các câu do `sentence_pause_ms` lúc ghép audio quyết định.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PunctuationPauses {
+    pub comma: u32,
+    pub semicolon: u32,
+    pub colon: u32,
+    pub dash: u32,
+    pub period: u32,
+    pub question: u32,
+    pub exclamation: u32,
+    pub ellipsis: u32,
+}
+
+impl Default for PunctuationPauses {
+    fn default() -> Self {
+        Self {
+            comma: 250,
+            semicolon: 400,
+            colon: 400,
+            dash: 300,
+            period: 600,
+            question: 600,
+            exclamation: 500,
+            ellipsis: 700,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PunctKind {
+    Comma,
+    Semicolon,
+    Colon,
+    Dash,
+    Period,
+    Question,
+    Exclamation,
+    Ellipsis,
+}
+
+impl PunctuationPauses {
+    fn ms(&self, kind: PunctKind) -> u32 {
+        let v = match kind {
+            PunctKind::Comma => self.comma,
+            PunctKind::Semicolon => self.semicolon,
+            PunctKind::Colon => self.colon,
+            PunctKind::Dash => self.dash,
+            PunctKind::Period => self.period,
+            PunctKind::Question => self.question,
+            PunctKind::Exclamation => self.exclamation,
+            PunctKind::Ellipsis => self.ellipsis,
+        };
+        v.min(MAX_PAUSE_MS)
+    }
+}
+
+/// Từ viết tắt / danh xưng kết thúc bằng dấu chấm nhưng không phải hết câu
+const ABBREVIATIONS: &[&str] = &[
+    "mr", "mrs", "ms", "dr", "prof", "st", "vs", "tp", "ts", "ths", "gs", "pgs", "bs", "ks", "tt",
+];
+
+fn is_closer(c: char) -> bool {
+    matches!(c, '"' | '\'' | '”' | '’' | ')' | ']' | '»')
+}
+
+/// Tách văn bản thành các đoạn kết thúc bằng dấu câu (giữ nguyên dấu trong đoạn) kèm thời lượng nghỉ sau đoạn.
+/// Chỉ tách khi dấu được bật (ms > 0), nằm trước khoảng trắng và không phải số thập phân / viết tắt.
+/// Đoạn cuối luôn có thời lượng nghỉ 0.
+fn split_by_punctuation(text: &str, cfg: &PunctuationPauses) -> Vec<(String, u32)> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let n = chars.len();
+    let mut out: Vec<(String, u32)> = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+
+    while i < n {
+        let (pos, c) = chars[i];
+        let mut kind: Option<PunctKind> = None;
+        let mut j = i + 1;
+        let mut single_dot = false;
+
+        match c {
+            ',' => kind = Some(PunctKind::Comma),
+            ';' => kind = Some(PunctKind::Semicolon),
+            ':' => kind = Some(PunctKind::Colon),
+            '.' | '?' | '!' | '…' => {
+                let mut dots = 0;
+                let mut has_ellipsis_char = false;
+                let mut last = c;
+                j = i;
+                while j < n && matches!(chars[j].1, '.' | '?' | '!' | '…') {
+                    match chars[j].1 {
+                        '.' => dots += 1,
+                        '…' => has_ellipsis_char = true,
+                        _ => {}
+                    }
+                    last = chars[j].1;
+                    j += 1;
+                }
+                single_dot = dots == 1 && !has_ellipsis_char && j == i + 1;
+                kind = Some(if has_ellipsis_char || dots >= 2 {
+                    PunctKind::Ellipsis
+                } else {
+                    match last {
+                        '?' => PunctKind::Question,
+                        '!' => PunctKind::Exclamation,
+                        _ => PunctKind::Period,
+                    }
+                });
+            }
+            '-' | '–' | '—' => {
+                // Chỉ coi là dấu ngắt khi đứng riêng giữa hai khoảng trắng và đã có chữ phía trước
+                let spaced = i > 0
+                    && chars[i - 1].1.is_whitespace()
+                    && (i + 1 == n || chars[i + 1].1.is_whitespace());
+                let has_text_before = text[start..pos].chars().any(|ch| ch.is_alphanumeric());
+                if spaced && has_text_before {
+                    kind = Some(PunctKind::Dash);
+                }
+            }
+            _ => {}
+        }
+
+        let Some(kind) = kind else {
+            i += 1;
+            continue;
+        };
+
+        // Dấu đóng ngoặc / ngoặc kép đi liền sau dấu câu thuộc về đoạn hiện tại
+        let is_dash = matches!(kind, PunctKind::Dash);
+        if !is_dash {
+            while j < n && is_closer(chars[j].1) {
+                j += 1;
+            }
+        }
+        let boundary = j >= n || chars[j].1.is_whitespace();
+        let end_byte = if j < n { chars[j].0 } else { text.len() };
+
+        let mut is_split = boundary;
+        if is_split && single_dot {
+            let before = text[start..pos]
+                .split_whitespace()
+                .last()
+                .unwrap_or("")
+                .trim_start_matches(|ch: char| !ch.is_alphanumeric());
+            let lower = before.to_lowercase();
+            let is_initial = before.chars().count() == 1 && before.chars().all(|ch| ch.is_alphabetic());
+            let is_number = !before.is_empty() && before.chars().all(|ch| ch.is_ascii_digit());
+            if is_initial || is_number || ABBREVIATIONS.contains(&lower.as_str()) {
+                is_split = false;
+            }
+        }
+
+        let ms = cfg.ms(kind);
+        if is_split && ms > 0 {
+            let chunk = text[start..end_byte].trim();
+            if chunk.chars().any(|ch| ch.is_alphanumeric()) {
+                out.push((chunk.to_string(), ms));
+                start = end_byte;
+            }
+        }
+        i = j.max(i + 1);
+    }
+
+    let tail = text[start..].trim();
+    if !tail.is_empty() {
+        out.push((tail.to_string(), 0));
+    } else if let Some(last) = out.last_mut() {
+        last.1 = 0;
+    }
+    out
+}
+
+/// Thay mỗi đoạn đọc bằng các đoạn con tách theo dấu câu, xen kẽ khoảng lặng.
+/// Không thêm khoảng lặng cuối mỗi đoạn đọc (đã có tag pause hoặc hết câu).
+fn expand_punctuation_pauses(segments: Vec<TextSegment>, cfg: &PunctuationPauses) -> Vec<TextSegment> {
+    let mut out = Vec::new();
+    for seg in segments {
+        match seg {
+            TextSegment::Speech(text) => {
+                for (chunk, ms) in split_by_punctuation(&text, cfg) {
+                    out.push(TextSegment::Speech(chunk));
+                    if ms > 0 {
+                        out.push(TextSegment::Pause(ms));
+                    }
+                }
+            }
+            pause => out.push(pause),
+        }
+    }
+    out
+}
+
 /// Gọi VieNeu-TTS và trả về bytes WAV đã chuẩn hóa header
 async fn request_wav_bytes(
     server_url: &str,
@@ -140,17 +335,21 @@ pub async fn synthesize_to_file(
     server_url: &str,
     req: &TtsSynthesizeRequest,
     output_path: &Path,
+    punctuation_pauses: Option<&PunctuationPauses>,
 ) -> Result<f64, String> {
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Không tạo được thư mục cache âm thanh: {}", e))?;
     }
 
-    let segments = split_pause_segments(&req.input);
+    let mut segments = split_pause_segments(&req.input);
+    if let Some(cfg) = punctuation_pauses {
+        segments = expand_punctuation_pauses(segments, cfg);
+    }
     let has_pause = segments.iter().any(|s| matches!(s, TextSegment::Pause(_)));
     // Tag pause có số 0 / không hợp lệ bị bỏ khỏi segments, nhưng vẫn phải loại khỏi text gửi TTS
     let has_tag = PAUSE_TAG_RE.is_match(&req.input);
 
-    if !has_pause && !has_tag {
+    if !has_pause && !has_tag && segments.len() <= 1 {
         let bytes = request_wav_bytes(server_url, req).await?;
         fs::write(output_path, &bytes)
             .map_err(|e| format!("Lỗi lưu file WAV: {}", e))?;
@@ -399,6 +598,82 @@ mod tests {
         assert_eq!(
             segs,
             vec![TextSegment::Speech("Anh ấy [thở dài] rồi đi.".to_string())]
+        );
+    }
+
+    #[test]
+    fn punctuation_split_keeps_marks_and_drops_trailing_pause() {
+        let cfg = PunctuationPauses::default();
+        let chunks = split_by_punctuation(
+            "Tôi gắng gượng trở mình, sờ được con dao găm để dưới gối, hơi thở dần bình thường trở lại.",
+            &cfg,
+        );
+        assert_eq!(
+            chunks,
+            vec![
+                ("Tôi gắng gượng trở mình,".to_string(), 250),
+                ("sờ được con dao găm để dưới gối,".to_string(), 250),
+                ("hơi thở dần bình thường trở lại.".to_string(), 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn punctuation_split_dash_and_disabled_comma() {
+        let mut cfg = PunctuationPauses::default();
+        let chunks = split_by_punctuation("Thỉnh thoảng tôi cũng quay về thăm trường cũ - trường Đại học Sư phạm.", &cfg);
+        assert_eq!(
+            chunks,
+            vec![
+                ("Thỉnh thoảng tôi cũng quay về thăm trường cũ -".to_string(), 300),
+                ("trường Đại học Sư phạm.".to_string(), 0),
+            ]
+        );
+        cfg.comma = 0;
+        let chunks = split_by_punctuation("Một, hai, ba.", &cfg);
+        assert_eq!(chunks, vec![("Một, hai, ba.".to_string(), 0)]);
+    }
+
+    #[test]
+    fn punctuation_split_skips_numbers_abbreviations_and_leading_dash() {
+        let cfg = PunctuationPauses::default();
+        for text in [
+            "Giá là 3,5 triệu và 10.000 đồng.",
+            "Ông Mr. Smith ở TP.HCM.",
+            "- Anh đi đâu đấy",
+            "Lúc 10:30 anh đến.",
+        ] {
+            let chunks = split_by_punctuation(text, &cfg);
+            assert_eq!(chunks.len(), 1, "{}", text);
+        }
+    }
+
+    #[test]
+    fn punctuation_split_handles_ellipsis_and_quotes() {
+        let cfg = PunctuationPauses::default();
+        let chunks = split_by_punctuation("Anh nói: \"Đi đi!\" rồi im lặng... mãi mãi.", &cfg);
+        assert_eq!(
+            chunks,
+            vec![
+                ("Anh nói:".to_string(), 400),
+                ("\"Đi đi!\"".to_string(), 500),
+                ("rồi im lặng...".to_string(), 700),
+                ("mãi mãi.".to_string(), 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_pause_tag_wins_over_trailing_punctuation() {
+        let cfg = PunctuationPauses::default();
+        let segs = expand_punctuation_pauses(split_pause_segments("Xin chào, [pause:1s] các bạn."), &cfg);
+        assert_eq!(
+            segs,
+            vec![
+                TextSegment::Speech("Xin chào,".to_string()),
+                TextSegment::Pause(1000),
+                TextSegment::Speech("các bạn.".to_string()),
+            ]
         );
     }
 }

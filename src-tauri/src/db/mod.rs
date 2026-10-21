@@ -510,6 +510,22 @@ impl Database {
         Ok(())
     }
 
+    /// Mọi đường dẫn audio đang được tham chiếu (câu + BGM chương), dùng để dọn file mồ côi.
+    pub fn get_referenced_audio_paths(&self) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT audio_path FROM sentences WHERE audio_path IS NOT NULL
+                 UNION
+                 SELECT bgm_path FROM chapters WHERE bgm_path IS NOT NULL;",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     pub fn clear_sentence_audio(&self, sentence_id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(

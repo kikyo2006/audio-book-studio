@@ -45,6 +45,7 @@ interface HeaderBarProps {
   onOpenInsertModal?: () => void;
   onOpenShortcutsHelp?: () => void;
   onOpenAbout?: () => void;
+  onOpenSettings?: () => void;
   onSelectProject?: (project: ProjectMetadata) => void;
 }
 
@@ -57,6 +58,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onOpenInsertModal,
   onOpenShortcutsHelp,
   onOpenAbout,
+  onOpenSettings,
   onSelectProject,
 }) => {
   const {
@@ -76,6 +78,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
     setSentences,
     setSelectedSentenceId,
     updateProjectStatus,
+    chapters,
   } = useProjectStore();
 
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
@@ -214,6 +217,8 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   };
 
   const readyCount = sentences.filter((s) => s.status === "ready").length;
+  // Export is available whenever any enabled chapter has audio, regardless of the selected chapter
+  const canExport = chapters.some((c) => c.is_enabled !== false && (c.ready_sentence_count || 0) > 0);
   const progressPct =
     sentences.length > 0 ? Math.round((readyCount / sentences.length) * 100) : 0;
 
@@ -248,6 +253,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
               onStopBatch={handleStopBatch}
               onOpenShortcutsHelp={onOpenShortcutsHelp}
               onOpenAbout={onOpenAbout}
+              onOpenSettings={onOpenSettings}
             />
 
             <div className="h-4 w-px bg-zinc-800 mx-1 hidden md:block" />
@@ -476,7 +482,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             <button
               type="button"
               onClick={onOpenExport}
-              disabled={readyCount === 0}
+              disabled={!canExport && readyCount === 0}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               title="Xuất kịch bản & file âm thanh"
             >
