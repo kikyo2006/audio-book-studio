@@ -2287,6 +2287,146 @@ impl Database {
         Ok(())
     }
 
+    /// Insert a whole imported project (project, chapters, sentences, characters, role settings)
+    /// in one transaction so a failed import leaves nothing behind.
+    pub fn import_project_bundle(
+        &self,
+        project: &Project,
+        chapters: &[Chapter],
+        sentences: &[Sentence],
+        characters: &[crate::models::CharacterProfile],
+        role_settings: Option<&crate::models::ProjectRoleSettings>,
+        status: &str,
+    ) -> Result<(), String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        tx.execute(
+            "INSERT INTO projects (
+                id, title, author, description, source_file_path, source_format,
+                cover_path, cover_base64, chapter_count, total_sentences, completed_sentences,
+                total_duration, created_at, updated_at, status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15);",
+            params![
+                project.id,
+                project.title,
+                project.author,
+                project.description,
+                project.source_file_path,
+                project.source_format,
+                project.cover_path,
+                project.cover_base64,
+                project.chapter_count as i64,
+                project.total_sentences as i64,
+                project.completed_sentences as i64,
+                project.total_duration,
+                project.created_at,
+                project.updated_at,
+                status
+            ],
+        )
+        .map_err(|e| format!("Lỗi lưu project: {}", e))?;
+
+        for c in chapters {
+            tx.execute(
+                "INSERT INTO chapters (
+                    id, project_id, idx, title, raw_content, sentence_count, ready_sentence_count,
+                    total_duration, bgm_path, bgm_volume, is_enabled
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11);",
+                params![
+                    c.id,
+                    c.project_id,
+                    c.index as i64,
+                    c.title,
+                    c.raw_content,
+                    c.sentence_count as i64,
+                    c.ready_sentence_count as i64,
+                    c.total_duration,
+                    c.bgm_path,
+                    c.bgm_volume.unwrap_or(0.2),
+                    if c.is_enabled { 1 } else { 0 }
+                ],
+            )
+            .map_err(|e| format!("Lỗi lưu chương: {}", e))?;
+        }
+
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO sentences (
+                        id, chapter_id, idx, raw_text, clean_text, is_dialogue, speaker,
+                        audio_path, duration, status, voice, temperature, speed, error_message
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);",
+                )
+                .map_err(|e| e.to_string())?;
+            for s in sentences {
+                stmt.execute(params![
+                    s.id,
+                    s.chapter_id,
+                    s.index as i64,
+                    s.raw_text,
+                    s.clean_text,
+                    if s.is_dialogue { 1 } else { 0 },
+                    s.speaker,
+                    s.audio_path,
+                    s.duration,
+                    s.status,
+                    s.voice,
+                    s.temperature,
+                    s.speed,
+                    s.error_message
+                ])
+                .map_err(|e| format!("Lỗi lưu câu: {}", e))?;
+            }
+        }
+
+        for ch in characters {
+            tx.execute(
+                "INSERT INTO characters (id, project_id, name, voice, speed, temperature, color, is_narrator)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
+                params![
+                    ch.id,
+                    ch.project_id,
+                    ch.name,
+                    ch.voice,
+                    ch.speed,
+                    ch.temperature,
+                    ch.color,
+                    if ch.is_narrator { 1 } else { 0 }
+                ],
+            )
+            .map_err(|e| format!("Lỗi lưu nhân vật: {}", e))?;
+        }
+
+        if let Some(r) = role_settings {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs().to_string())
+                .unwrap_or_else(|_| "0".to_string());
+            tx.execute(
+                "INSERT OR REPLACE INTO project_role_settings (
+                    project_id, narrator_voice, narrator_speed, narrator_temperature,
+                    dialogue_voice, dialogue_speed, dialogue_temperature, preset_id, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+                params![
+                    project.id,
+                    r.narrator.voice,
+                    r.narrator.speed,
+                    r.narrator.temperature,
+                    r.dialogue.voice,
+                    r.dialogue.speed,
+                    r.dialogue.temperature,
+                    r.preset_id,
+                    now
+                ],
+            )
+            .map_err(|e| format!("Lỗi lưu thiết lập vai: {}", e))?;
+        }
+
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn delete_project(&self, project_id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM projects WHERE id = ?1;", params![project_id])

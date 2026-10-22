@@ -21,14 +21,16 @@ import {
   Plus,
   X,
   MoveHorizontal,
+  Layers,
 } from "lucide-react";
+import { BgmLibraryModal } from "./BgmLibraryModal";
+import { useConfirmStore } from "@/stores/useConfirmStore";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useStudioSettingsStore } from "@/stores/useStudioSettingsStore";
 import {
   tauriCutAudioRegion,
   tauriReadAudioBase64,
   tauriShiftBgmAudio,
-  tauriSelectChapterBgmFile,
   tauriUpdateChapterBgm,
 } from "@/lib/tauri";
 import {
@@ -242,6 +244,7 @@ export const WaveformPanel: React.FC = () => {
     playingSentenceId,
     isPlaying,
     activeChapter,
+    chapters,
     setSelectedSentenceId,
     setPlayingSentenceId,
     setIsPlaying,
@@ -797,17 +800,52 @@ export const WaveformPanel: React.FC = () => {
     }
   };
 
-  const handleSelectBgm = async () => {
+  const [isBgmLibraryOpen, setIsBgmLibraryOpen] = useState(false);
+
+  // Open the BGM library; the chosen file is applied in handleApplyBgmFromLibrary
+  const handleSelectBgm = () => {
     if (!activeChapter) return;
-    const file = await tauriSelectChapterBgmFile();
-    if (file) {
-      await tauriUpdateChapterBgm({
-        chapterId: activeChapter.id,
-        bgmPath: file,
-        bgmVolume: bgmVolume,
-      });
-      updateChapterBgm(activeChapter.id, file, bgmVolume);
-    }
+    setIsBgmLibraryOpen(true);
+  };
+
+  const handleApplyBgmFromLibrary = async (file: string) => {
+    if (!activeChapter) return;
+    await tauriUpdateChapterBgm({
+      chapterId: activeChapter.id,
+      bgmPath: file,
+      bgmVolume: bgmVolume,
+    });
+    updateChapterBgm(activeChapter.id, file, bgmVolume);
+  };
+
+  // Use the current chapter's BGM (e.g. the edited version) for every chapter of the project
+  const handleApplyBgmToAllChapters = () => {
+    const bgmPath = activeChapter?.bgm_path;
+    if (!bgmPath) return;
+    const targets = chapters.filter((c) => c.id !== activeChapter?.id);
+    if (targets.length === 0) return;
+
+    useConfirmStore.getState().askConfirm({
+      title: "Áp dụng BGM cho tất cả chương",
+      description: `Đặt nhạc nền này cho ${targets.length} chương còn lại?\nChương nào đang có BGM khác sẽ bị thay thế.`,
+      confirmText: "Áp dụng",
+      cancelText: "Hủy",
+      isDestructive: false,
+      onConfirm: async () => {
+        try {
+          for (const c of targets) {
+            const vol = c.bgm_volume ?? bgmVolume;
+            await tauriUpdateChapterBgm({ chapterId: c.id, bgmPath, bgmVolume: vol });
+            updateChapterBgm(c.id, bgmPath, vol);
+          }
+          setClipboardNotice(`Đã áp dụng BGM cho ${targets.length} chương`);
+          setTimeout(() => setClipboardNotice(null), 2500);
+        } catch (err) {
+          setClipboardNotice(`Không áp dụng được BGM: ${String(err)}`);
+          setTimeout(() => setClipboardNotice(null), 3500);
+        }
+      },
+    });
   };
 
   const handleRemoveBgm = async () => {
@@ -1421,6 +1459,20 @@ export const WaveformPanel: React.FC = () => {
                   <span>{activeChapter?.bgm_path ? "Đổi" : "Nhập BGM"}</span>
                 </button>
 
+                {activeChapter?.bgm_path && chapters.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleApplyBgmToAllChapters();
+                    }}
+                    className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-emerald-300 text-[10px] transition-colors"
+                    title="Áp dụng BGM này cho tất cả chương"
+                  >
+                    <Layers className="w-3 h-3" />
+                  </button>
+                )}
+
                 {activeChapter?.bgm_path && (
                   <button
                     type="button"
@@ -1511,6 +1563,12 @@ export const WaveformPanel: React.FC = () => {
           </div>
         </div>
       </div>
+      <BgmLibraryModal
+        isOpen={isBgmLibraryOpen}
+        currentPath={activeChapter?.bgm_path}
+        onClose={() => setIsBgmLibraryOpen(false)}
+        onSelect={handleApplyBgmFromLibrary}
+      />
     </footer>
   );
 };

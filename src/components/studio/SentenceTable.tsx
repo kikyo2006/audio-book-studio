@@ -604,6 +604,9 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
     getScrollElement: () => parentRef.current,
     estimateSize: () => 100,
     overscan: 10,
+    // Key measured heights by sentence id (not index) so inserting / deleting rows
+    // doesn't leave stale heights behind and create gaps or overlaps
+    getItemKey: (index) => sentences[index]?.id ?? index,
   });
 
   // Register smooth scroll callback for Find & Replace dialog
@@ -617,10 +620,17 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
     return () => registerScrollCallback(null);
   }, [rowVirtualizer, registerScrollCallback]);
 
-  // Auto-scroll teleprompter to keep the currently playing sentence visible
+  // Auto-scroll teleprompter to keep the currently playing sentence visible.
+  // Only reacts to the playing sentence changing, NOT to list edits (insert / delete / paste),
+  // otherwise every edit above would yank the view back to the playing row.
+  const sentencesForScrollRef = useRef(sentences);
+  useEffect(() => {
+    sentencesForScrollRef.current = sentences;
+  }, [sentences]);
+
   useEffect(() => {
     if (playingSentenceId) {
-      const index = sentences.findIndex((s) => s.id === playingSentenceId);
+      const index = sentencesForScrollRef.current.findIndex((s) => s.id === playingSentenceId);
       if (index !== -1) {
         rowVirtualizer.scrollToIndex(index, {
           align: "center",
@@ -628,7 +638,7 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
         });
       }
     }
-  }, [playingSentenceId, sentences, rowVirtualizer]);
+  }, [playingSentenceId, rowVirtualizer]);
 
   const handleRowClick = useCallback(
     (sentence: SentenceItem) => {

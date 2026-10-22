@@ -329,11 +329,12 @@ fn norm_path(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/").to_lowercase()
 }
 
-/// Xóa file nếu nó nằm trong thư mục dữ liệu của app (audio_cache / bgm), không bao giờ đụng file của người dùng.
+/// Xóa file nếu nó nằm trong thư mục audio_cache của app. Thư viện BGM (`bgm/`) và file gốc của
+/// người dùng không bao giờ bị xóa tự động.
 fn remove_if_app_owned(app_handle: &AppHandle, path: &Path) {
     let app_dir = app_data_dir_of(app_handle);
     let p = norm_path(path);
-    let owned = [app_dir.join("audio_cache"), app_dir.join("bgm")]
+    let owned = [app_dir.join("audio_cache")]
         .iter()
         .any(|d| p.starts_with(&format!("{}/", norm_path(d))));
     if owned {
@@ -349,7 +350,8 @@ pub fn cleanup_orphan_audio(app_data_dir: &Path, db: &Database) {
     let referenced: std::collections::HashSet<String> =
         referenced.iter().map(|p| norm_path(Path::new(p))).collect();
 
-    for dir in [app_data_dir.join("audio_cache").join("edits"), app_data_dir.join("bgm")] {
+    // Thư viện BGM (`bgm/`) được giữ lại, chỉ dọn file chỉnh sửa không còn dùng
+    for dir in [app_data_dir.join("audio_cache").join("edits")] {
         let Ok(entries) = fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -360,13 +362,71 @@ pub fn cleanup_orphan_audio(app_data_dir: &Path, db: &Database) {
     }
 }
 
-/// Copy file nhạc nền người dùng chọn vào thư mục dữ liệu của app để không phụ thuộc file gốc.
+fn bgm_library_dir(app_handle: &AppHandle) -> PathBuf {
+    app_data_dir_of(app_handle).join("bgm")
+}
+
+/// Marker trong tên file BGM đã chỉnh sửa (cắt / dời) lưu trong thư viện
+const EDITED_MARKER: &str = " (edited ";
+
+/// Đường dẫn bản BGM đã chỉnh sửa trong thư viện: `<tên gốc> (edited xxxxxxxx).wav`
+fn bgm_edited_path(app_handle: &AppHandle, source: &Path) -> PathBuf {
+    let dir = bgm_library_dir(app_handle);
+    let _ = fs::create_dir_all(&dir);
+    let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("bgm");
+    let stem = stem.split(EDITED_MARKER).next().unwrap_or(stem);
+    dir.join(format!(
+        "{}{}{}).wav",
+        stem,
+        EDITED_MARKER,
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    ))
+}
+
+/// Sau khi chỉnh sửa BGM: xóa bản chỉnh sửa cũ trong thư viện nếu không còn chương nào dùng.
+/// File người dùng tải lên (không có marker) luôn được giữ lại.
+fn remove_replaced_edited_bgm(app_handle: &AppHandle, db: &Database, old: &Path) {
+    let is_edited = old
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map_or(false, |s| s.contains(EDITED_MARKER));
+    let in_library = norm_path(old).starts_with(&format!("{}/", norm_path(&bgm_library_dir(app_handle))));
+    if !is_edited || !in_library {
+        return;
+    }
+    let key = norm_path(old);
+    let still_used = db
+        .get_referenced_audio_paths()
+        .map(|paths| paths.iter().any(|p| norm_path(Path::new(p)) == key))
+        .unwrap_or(true);
+    if !still_used {
+        let _ = fs::remove_file(old);
+    }
+}
+
+/// Cache độ dài file thư viện, khóa theo đường dẫn + dung lượng + thời gian sửa
+static DURATION_CACHE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Option<f64>>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+#[derive(serde::Serialize)]
+pub struct BgmLibraryItem {
+    pub path: String,
+    pub name: String,
+    pub size_bytes: u64,
+    pub modified_secs: u64,
+    pub duration_secs: Option<f64>,
+    /// Số chương đang dùng file này làm BGM (chặn xóa file đang dùng)
+    pub used_by: usize,
+}
+
+/// Thêm file nhạc nền vào thư viện BGM của app (copy một lần, dùng lại cho nhiều chương).
+/// Trùng tên và dung lượng với file đã có thì dùng lại file cũ thay vì copy thêm.
 #[tauri::command]
 pub async fn import_bgm_file(
     source_path: String,
     app_handle: AppHandle,
 ) -> Result<String, String> {
-    let dir = app_data_dir_of(&app_handle).join("bgm");
+    let dir = bgm_library_dir(&app_handle);
 
     tokio::task::spawn_blocking(move || {
         let source = PathBuf::from(&source_path);
@@ -375,19 +435,119 @@ pub async fn import_bgm_file(
         }
         fs::create_dir_all(&dir).map_err(|e| format!("Không tạo được thư mục BGM: {}", e))?;
 
+        let source_size = fs::metadata(&source).map(|m| m.len()).unwrap_or(0);
         let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("bgm");
         let ext = source.extension().and_then(|s| s.to_str()).unwrap_or("wav");
-        let target = dir.join(format!(
-            "{}_{}.{}",
-            stem,
-            &uuid::Uuid::new_v4().simple().to_string()[..8],
-            ext
-        ));
+
+        let mut target = dir.join(format!("{}.{}", stem, ext));
+        let mut counter = 2;
+        while target.exists() {
+            if fs::metadata(&target).map(|m| m.len()).unwrap_or(u64::MAX) == source_size {
+                return Ok(target.to_string_lossy().to_string());
+            }
+            target = dir.join(format!("{} ({}).{}", stem, counter, ext));
+            counter += 1;
+        }
         fs::copy(&source, &target).map_err(|e| format!("Không copy được file nhạc nền: {}", e))?;
         Ok(target.to_string_lossy().to_string())
     })
     .await
     .map_err(|e| format!("Task copy BGM lỗi: {}", e))?
+}
+
+/// Liệt kê thư viện BGM (mới nhất trước) kèm số chương đang dùng từng file.
+#[tauri::command]
+pub async fn list_bgm_library(
+    app_handle: AppHandle,
+    db: State<'_, Arc<Database>>,
+) -> Result<Vec<BgmLibraryItem>, String> {
+    let dir = bgm_library_dir(&app_handle);
+    let db = db.inner().clone();
+
+    tokio::task::spawn_blocking(move || {
+        let referenced: Vec<String> = db
+            .get_referenced_audio_paths()?
+            .iter()
+            .map(|p| norm_path(Path::new(p)))
+            .collect();
+
+        let mut items = Vec::new();
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return Ok(items);
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()).map(|n| n.to_string()) else {
+                continue;
+            };
+            let meta = entry.metadata().ok();
+            let modified_secs = meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let key = norm_path(&path);
+            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            items.push(BgmLibraryItem {
+                path: path.to_string_lossy().to_string(),
+                name,
+                size_bytes: size,
+                modified_secs,
+                duration_secs: {
+                    let cache_key = format!("{}|{}|{}", key, size, modified_secs);
+                    let cached = DURATION_CACHE.lock().ok().and_then(|c| c.get(&cache_key).copied());
+                    match cached {
+                        Some(v) => v,
+                        None => {
+                            let v = crate::services::audio::probe_audio_duration(&path);
+                            if let Ok(mut c) = DURATION_CACHE.lock() {
+                                c.insert(cache_key, v);
+                            }
+                            v
+                        }
+                    }
+                },
+                used_by: referenced.iter().filter(|r| **r == key).count(),
+            });
+        }
+        items.sort_by(|a, b| b.modified_secs.cmp(&a.modified_secs));
+        Ok(items)
+    })
+    .await
+    .map_err(|e| format!("Task đọc thư viện BGM lỗi: {}", e))?
+}
+
+/// Xóa một file khỏi thư viện BGM. Từ chối nếu file không nằm trong thư viện hoặc đang được chương dùng.
+#[tauri::command]
+pub async fn delete_bgm_library_file(
+    file_path: String,
+    app_handle: AppHandle,
+    db: State<'_, Arc<Database>>,
+) -> Result<(), String> {
+    let dir = bgm_library_dir(&app_handle);
+    let db = db.inner().clone();
+
+    tokio::task::spawn_blocking(move || {
+        let path = PathBuf::from(&file_path);
+        let key = norm_path(&path);
+        if !key.starts_with(&format!("{}/", norm_path(&dir))) {
+            return Err("File không nằm trong thư viện BGM.".to_string());
+        }
+        let in_use = db
+            .get_referenced_audio_paths()?
+            .iter()
+            .any(|p| norm_path(Path::new(p)) == key);
+        if in_use {
+            return Err("File đang được một chương dùng làm nhạc nền, không thể xóa.".to_string());
+        }
+        fs::remove_file(&path).map_err(|e| format!("Không xóa được file: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Task xóa BGM lỗi: {}", e))?
 }
 
 /// Đường dẫn file dẫn xuất (`<tên gốc>_<tag>_<8 ký tự>.wav`) nằm trong thư mục dữ liệu của app,
@@ -444,7 +604,11 @@ pub async fn cut_audio_region(
             return Err(format!("Không tìm thấy file audio: {}", source.display()));
         }
 
-        let output = derived_wav_path(&app_handle, &source, "cut");
+        let output = if is_voice {
+            derived_wav_path(&app_handle, &source, "cut")
+        } else {
+            bgm_edited_path(&app_handle, &source)
+        };
 
         let duration =
             crate::services::audio::remove_region_to_wav(&source, &output, start_secs, end_secs)?;
@@ -457,6 +621,9 @@ pub async fn cut_audio_region(
         }
         // File cũ không còn dùng nữa: xóa nếu do app tạo ra (không đụng file gốc của người dùng)
         remove_if_app_owned(&app_handle, &source);
+        if !is_voice {
+            remove_replaced_edited_bgm(&app_handle, &db, &source);
+        }
 
         Ok(CutRegionResult { path: out_str, duration })
     })
@@ -482,12 +649,13 @@ pub async fn shift_bgm_audio(
         if !source.exists() {
             return Err(format!("Không tìm thấy file audio: {}", source.display()));
         }
-        let output = derived_wav_path(&app_handle, &source, "shift");
+        let output = bgm_edited_path(&app_handle, &source);
         let duration =
             crate::services::audio::shift_audio_to_wav(&source, &output, offset_secs)?;
         let out_str = output.to_string_lossy().to_string();
         db.update_chapter_bgm(&chapter_id, Some(out_str.clone()), bgm_volume)?;
         remove_if_app_owned(&app_handle, &source);
+        remove_replaced_edited_bgm(&app_handle, &db, &source);
         Ok(CutRegionResult { path: out_str, duration })
     })
     .await

@@ -714,11 +714,29 @@ export async function tauriInsertBlankSentences(params: {
   });
 }
 
-// Pick a chapter BGM file and copy it into the app data folder so it no longer depends on the original file
-export async function tauriSelectChapterBgmFile(): Promise<string | null> {
+export interface BgmLibraryItem {
+  path: string;
+  name: string;
+  size_bytes: number;
+  modified_secs: number;
+  duration_secs: number | null;
+  used_by: number;
+}
+
+// Pick a file from disk and add it to the BGM library (copied into the app data folder)
+export async function tauriUploadBgmToLibrary(): Promise<string | null> {
   const picked = await tauriSelectBgmFile();
   if (!picked) return null;
   return await invoke<string>("import_bgm_file", { sourcePath: picked });
+}
+
+export async function tauriListBgmLibrary(): Promise<BgmLibraryItem[]> {
+  if (!isTauriEnvironment()) return [];
+  return await invoke<BgmLibraryItem[]>("list_bgm_library");
+}
+
+export async function tauriDeleteBgmLibraryFile(filePath: string): Promise<void> {
+  await invoke("delete_bgm_library_file", { filePath });
 }
 
 export async function tauriSelectBgmFile(): Promise<string | null> {
@@ -775,6 +793,88 @@ export async function tauriUpdateChapterBgm(params: {
     bgmPath: params.bgmPath,
     bgmVolume: params.bgmVolume ?? 0.2,
   });
+}
+
+export interface ProjectExportSummary {
+  file_path: string;
+  audio_count: number;
+  bgm_count: number;
+  missing_audio_count: number;
+  size_bytes: number;
+}
+
+export interface ProjectImportSummary {
+  project: ProjectMetadata;
+  audio_count: number;
+  bgm_count: number;
+  missing_audio_count: number;
+}
+
+export interface ProjectArchiveProgress {
+  kind: "export" | "import";
+  current: number;
+  total: number;
+}
+
+const PROJECT_ARCHIVE_EXT = "bsproj";
+
+/** Ask where to save the exported project file (.bsproj) */
+export async function tauriSelectProjectExportPath(
+  defaultName: string
+): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const safeName = defaultName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "project";
+    return await save({
+      defaultPath: `${safeName}.${PROJECT_ARCHIVE_EXT}`,
+      filters: [{ name: "Dự án BookStudio (*.bsproj)", extensions: [PROJECT_ARCHIVE_EXT] }],
+      title: "Xuất dự án (kèm toàn bộ audio)",
+    });
+  } catch (err) {
+    console.error("Lỗi khi mở hộp thoại lưu dự án:", err);
+    return null;
+  }
+}
+
+/** Ask which project file (.bsproj) to import */
+export async function tauriSelectProjectImportFile(): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      title: "Chọn file dự án BookStudio để nhập",
+      filters: [{ name: "Dự án BookStudio (*.bsproj)", extensions: [PROJECT_ARCHIVE_EXT] }],
+    });
+    return typeof selected === "string" ? selected : null;
+  } catch (err) {
+    console.error("Lỗi khi mở hộp thoại chọn dự án:", err);
+    return null;
+  }
+}
+
+export async function tauriExportProjectArchive(
+  projectId: string,
+  destPath: string
+): Promise<ProjectExportSummary> {
+  return await invoke<ProjectExportSummary>("export_project_archive", { projectId, destPath });
+}
+
+export async function tauriImportProjectArchive(
+  filePath: string
+): Promise<ProjectImportSummary> {
+  return await invoke<ProjectImportSummary>("import_project_archive", { filePath });
+}
+
+/** Subscribe to export/import progress. Returns the unsubscribe function. */
+export async function tauriListenProjectArchiveProgress(
+  handler: (progress: ProjectArchiveProgress) => void
+): Promise<() => void> {
+  if (!isTauriEnvironment()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return await listen<ProjectArchiveProgress>("project-archive-progress", (e) =>
+    handler(e.payload)
+  );
 }
 
 export async function tauriDeleteProject(projectId: string): Promise<void> {

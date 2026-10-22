@@ -19,6 +19,7 @@ import {
   Loader2,
   ArrowUpDown,
   RotateCw,
+  Download,
 } from "lucide-react";
 import { HeaderBar } from "@/components/studio/HeaderBar";
 import { ChapterList } from "@/components/studio/ChapterList";
@@ -49,6 +50,11 @@ import {
   tauriGetProjects,
   tauriGetSentences,
   tauriUpdateProjectStatus,
+  tauriExportProjectArchive,
+  tauriImportProjectArchive,
+  tauriListenProjectArchiveProgress,
+  tauriSelectProjectExportPath,
+  tauriSelectProjectImportFile,
 } from "@/lib/tauri";
 import type { ProjectMetadata } from "@/types";
 
@@ -175,6 +181,79 @@ export default function Home() {
   };
 
   const { askConfirm } = useConfirmStore();
+
+  // Export / import a whole project (.bsproj) with all audio
+  const [archiveBusy, setArchiveBusy] = useState<{
+    kind: "export" | "import";
+    title: string;
+    current: number;
+    total: number;
+  } | null>(null);
+  const [archiveNotice, setArchiveNotice] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const runArchiveTask = async <T,>(
+    kind: "export" | "import",
+    title: string,
+    task: () => Promise<T>
+  ): Promise<T | null> => {
+    setArchiveNotice(null);
+    setArchiveBusy({ kind, title, current: 0, total: 0 });
+    const unlisten = await tauriListenProjectArchiveProgress((p) => {
+      if (p.kind === kind) {
+        setArchiveBusy({ kind, title, current: p.current, total: p.total });
+      }
+    });
+    try {
+      return await task();
+    } catch (err) {
+      console.error(`Lỗi ${kind} dự án:`, err);
+      setArchiveNotice({ ok: false, message: String(err) });
+      return null;
+    } finally {
+      unlisten();
+      setArchiveBusy(null);
+    }
+  };
+
+  const handleExportProject = async (project: ProjectMetadata) => {
+    if (archiveBusy) return;
+    const destPath = await tauriSelectProjectExportPath(project.title);
+    if (!destPath) return;
+    const summary = await runArchiveTask("export", project.title, () =>
+      tauriExportProjectArchive(project.id, destPath)
+    );
+    if (summary) {
+      const mb = (summary.size_bytes / (1024 * 1024)).toFixed(1);
+      const missing =
+        summary.missing_audio_count > 0
+          ? ` (${summary.missing_audio_count} câu mất file audio nên xuất không kèm âm thanh)`
+          : "";
+      setArchiveNotice({
+        ok: true,
+        message: `Đã xuất "${project.title}": ${summary.audio_count} file audio, ${mb} MB${missing}.`,
+      });
+    }
+  };
+
+  const handleImportProject = async () => {
+    if (archiveBusy) return;
+    const filePath = await tauriSelectProjectImportFile();
+    if (!filePath) return;
+    const summary = await runArchiveTask("import", "Đang nhập dự án", () =>
+      tauriImportProjectArchive(filePath)
+    );
+    if (summary) {
+      await refreshProjects();
+      const missing =
+        summary.missing_audio_count > 0
+          ? ` ${summary.missing_audio_count} câu thiếu audio cần tạo lại.`
+          : "";
+      setArchiveNotice({
+        ok: true,
+        message: `Đã nhập "${summary.project.title}": ${summary.audio_count} file audio.${missing}`,
+      });
+    }
+  };
 
   const handleDeleteProject = (
     projectId: string,
@@ -491,6 +570,17 @@ export default function Home() {
                   <Sliders style={{ width: 14, height: 14, flexShrink: 0 }} className="text-zinc-400" />
                   <span>Cài Đặt Giọng & Kiểm Tra TTS</span>
                 </button>
+
+                <button
+                  onClick={handleImportProject}
+                  disabled={!!archiveBusy}
+                  className="rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 font-medium text-xs border border-zinc-800 flex items-center gap-2 hover:border-zinc-700 transition-colors disabled:opacity-50"
+                  style={{ paddingTop: 8, paddingBottom: 8, paddingLeft: 14, paddingRight: 14 }}
+                  title="Nhập dự án đã xuất từ máy khác (file .bsproj, kèm toàn bộ audio)"
+                >
+                  <Download style={{ width: 14, height: 14, flexShrink: 0 }} className="text-zinc-400" />
+                  <span>Nhập Dự Án (.bsproj)</span>
+                </button>
               </div>
             </div>
 
@@ -736,6 +826,7 @@ export default function Home() {
                         project={proj}
                         onOpen={openProject}
                         onDelete={handleDeleteProject}
+                        onExport={handleExportProject}
                         onStatusChange={async (id, status) => {
                           await tauriUpdateProjectStatus(id, status);
                           updateProjectStatus(id, status);
@@ -765,6 +856,54 @@ export default function Home() {
 
       {/* Bottom Waveform Inspector Panel */}
       {activeProject && <WaveformPanel />}
+
+      {/* Project export / import status (solid background, bottom right) */}
+      {(archiveBusy || archiveNotice) && (
+        <div
+          style={{
+            position: "fixed", right: 20, bottom: 20, zIndex: 9990, width: 340,
+            backgroundColor: "#18181b", border: "1px solid #3f3f46", borderRadius: 12,
+            padding: "12px 14px", boxShadow: "0 20px 40px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(255, 255, 255, 0.1)",
+          }}
+        >
+          {archiveBusy ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#e4e4e7", fontWeight: 600 }}>
+                <Loader2 className="animate-spin text-indigo-400 shrink-0" style={{ width: 14, height: 14 }} />
+                <span className="truncate">
+                  {archiveBusy.kind === "export" ? "Đang xuất" : "Đang nhập"}: {archiveBusy.title}
+                </span>
+              </div>
+              <div style={{ marginTop: 8, height: 6, borderRadius: 999, backgroundColor: "#27272a", overflow: "hidden" }}>
+                <div
+                  style={{
+                    height: "100%", backgroundColor: "#6366f1", transition: "width 0.2s",
+                    width: archiveBusy.total > 0 ? `${Math.round((archiveBusy.current / archiveBusy.total) * 100)}%` : "8%",
+                  }}
+                />
+              </div>
+              <div style={{ marginTop: 4, fontSize: 10, color: "#a1a1aa" }}>
+                {archiveBusy.total > 0 ? `${archiveBusy.current} / ${archiveBusy.total} file audio` : "Đang chuẩn bị..."}
+              </div>
+            </>
+          ) : (
+            archiveNotice && (
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <p style={{ flex: 1, margin: 0, fontSize: 12, lineHeight: 1.5, color: archiveNotice.ok ? "#6ee7b7" : "#fda4af" }}>
+                  {archiveNotice.message}
+                </p>
+                <button
+                  onClick={() => setArchiveNotice(null)}
+                  className="text-zinc-500 hover:text-zinc-200 text-xs shrink-0"
+                  aria-label="Đóng thông báo"
+                >
+                  ✕
+                </button>
+              </div>
+            )
+          )}
+        </div>
+      )}
 
       {/* Overlays / Modals */}
       <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />

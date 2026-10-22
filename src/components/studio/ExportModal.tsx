@@ -15,13 +15,13 @@ import {
   Layers,
   FolderOpen,
 } from "lucide-react";
+import { BgmLibraryModal } from "./BgmLibraryModal";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useStudioSettingsStore } from "@/stores/useStudioSettingsStore";
 import {
   tauriExportChapterAudio,
   tauriExportBookAudio,
   tauriExportBatchChapters,
-  tauriSelectChapterBgmFile,
   tauriSelectDirectory,
   tauriSelectSaveAudioFile,
   tauriUpdateChapterBgm,
@@ -54,6 +54,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   const [format, setFormat] = useState<"wav" | "mp3" | "m4b">("wav");
   const [outputPath, setOutputPath] = useState<string>("");
   const [isExporting, setIsExporting] = useState(false);
+  const [isBgmLibraryOpen, setIsBgmLibraryOpen] = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
 
   const cleanProjectTitle = (activeProject?.title || "Audiobook")
@@ -129,17 +130,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     0
   );
 
-  const handleSelectBgm = async () => {
+  const handleSelectBgm = () => {
     if (!activeChapter) return;
-    const file = await tauriSelectChapterBgmFile();
-    if (file) {
-      await tauriUpdateChapterBgm({
-        chapterId: activeChapter.id,
-        bgmPath: file,
-        bgmVolume: bgmVolume,
-      });
-      updateChapterBgm(activeChapter.id, file, bgmVolume);
-    }
+    setIsBgmLibraryOpen(true);
+  };
+
+  const handleApplyBgmFromLibrary = async (file: string) => {
+    if (!activeChapter) return;
+    await tauriUpdateChapterBgm({
+      chapterId: activeChapter.id,
+      bgmPath: file,
+      bgmVolume: bgmVolume,
+    });
+    updateChapterBgm(activeChapter.id, file, bgmVolume);
   };
 
   const handleBrowsePath = async () => {
@@ -727,6 +730,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
           </button>
         </div>
       </div>
+      <BgmLibraryModal
+        isOpen={isBgmLibraryOpen}
+        currentPath={activeChapter?.bgm_path}
+        onClose={() => setIsBgmLibraryOpen(false)}
+        onSelect={handleApplyBgmFromLibrary}
+      />
     </div>
   );
 };

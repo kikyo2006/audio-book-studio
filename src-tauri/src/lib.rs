@@ -52,6 +52,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ebook::parse_ebook,
             commands::ebook::import_ebook_to_project,
+            commands::archive::export_project_archive,
+            commands::archive::import_project_archive,
             commands::project::get_projects,
             commands::project::get_chapters,
             commands::project::get_sentences,
@@ -66,6 +68,8 @@ pub fn run() {
             commands::audio::read_audio_base64,
             commands::audio::cut_audio_region,
             commands::audio::import_bgm_file,
+            commands::audio::list_bgm_library,
+            commands::audio::delete_bgm_library_file,
             commands::audio::shift_bgm_audio,
             commands::project::save_character,
             commands::project::get_project_characters,

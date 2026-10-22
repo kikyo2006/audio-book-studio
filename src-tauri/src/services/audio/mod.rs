@@ -39,6 +39,39 @@ impl Default for AudioConcatenateOptions {
     }
 }
 
+/// Lấy độ dài file audio (giây). Ưu tiên đọc từ header (nhanh), không có thì giải mã cả file.
+pub fn probe_audio_duration(path: &Path) -> Option<f64> {
+    let from_header = (|| {
+        let src = std::fs::File::open(path).ok()?;
+        let mss = MediaSourceStream::new(Box::new(src), Default::default());
+        let mut hint = Hint::new();
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            hint.with_extension(ext);
+        }
+        let probed = symphonia::default::get_probe()
+            .format(&hint, mss, &Default::default(), &Default::default())
+            .ok()?;
+        let track = probed
+            .format
+            .tracks()
+            .iter()
+            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)?;
+        let frames = track.codec_params.n_frames?;
+        let rate = track.codec_params.sample_rate?;
+        if rate == 0 {
+            return None;
+        }
+        Some(frames as f64 / rate as f64)
+    })();
+
+    from_header.or_else(|| {
+        decode_audio_file(path)
+            .ok()
+            .filter(|(samples, sr)| !samples.is_empty() && *sr > 0)
+            .map(|(samples, sr)| samples.len() as f64 / sr as f64)
+    })
+}
+
 /// Giải mã file audio bất kỳ (MP3, WAV, FLAC, OGG, M4A) thành chuỗi mẫu mono f32 (-1.0 -> 1.0)
 pub fn decode_audio_file(path: &Path) -> Result<(Vec<f32>, u32), String> {
     let src = std::fs::File::open(path)

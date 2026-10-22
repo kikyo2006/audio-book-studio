@@ -10,6 +10,7 @@ import {
   ArchiveX,
   RotateCcw,
   Loader2,
+  Download,
 } from "lucide-react";
 import type { ProjectMetadata } from "@/types";
 import { tauriResetProjectCover, tauriUpdateProjectCover } from "@/lib/tauri";
@@ -20,6 +21,7 @@ interface ProjectCardProps {
   onOpen: (project: ProjectMetadata) => void;
   onDelete: (projectId: string, title: string, e: React.MouseEvent) => void;
   onStatusChange?: (projectId: string, status: "active" | "completed" | "dropped") => void;
+  onExport?: (project: ProjectMetadata) => void;
 }
 
 export const ProjectCard: React.FC<ProjectCardProps> = ({
@@ -27,6 +29,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
   onOpen,
   onDelete,
   onStatusChange,
+  onExport,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { updateProjectCover } = useProjectStore();
@@ -262,6 +265,21 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
           <span>Mở dự án</span>
           <ArrowRight className="w-3 h-3 ml-0.5" />
         </button>
+
+        {/* Export project (.bsproj) with all audio */}
+        {onExport && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onExport(project);
+            }}
+            className="p-1 rounded-lg border border-transparent text-zinc-500 hover:text-indigo-300 hover:bg-indigo-950/40 hover:border-indigo-900/50 transition-colors"
+            title="Xuất dự án (kèm toàn bộ audio) để mang sang máy khác"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </button>
+        )}
 
         {/* Drop / Restore button */}
         {onStatusChange && (
