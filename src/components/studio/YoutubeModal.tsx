@@ -15,7 +15,9 @@ import { useProjectStore } from "@/stores/useProjectStore";
 import { useStudioSettingsStore } from "@/stores/useStudioSettingsStore";
 import {
   isTauriEnvironment,
+  tauriExportBookVideo,
   tauriExportChapterVideo,
+  type VideoVisualsInput,
   tauriOpenPath,
   tauriReadImageDataUrl,
   tauriRevealPath,
@@ -56,6 +58,10 @@ interface YoutubePrefs {
   showChapterTitle: boolean;
   channel: string;
   mixBgm: boolean;
+  /** each: mỗi chương một video; merged: gộp các chương đã chọn thành 1 video */
+  videoMode: "each" | "merged";
+  /** Khoảng nghỉ giữa các chương khi gộp (ms) */
+  chapterPauseMs: number;
   /** Logo kênh (đường dẫn file ảnh) và có hiện trên thumbnail hay không */
   logoPath: string;
   logoOnThumbnail: boolean;
@@ -80,6 +86,8 @@ const DEFAULT_PREFS: YoutubePrefs = {
   showChapterTitle: false,
   channel: "",
   mixBgm: true,
+  videoMode: "each",
+  chapterPauseMs: 2000,
   logoPath: "",
   logoOnThumbnail: true,
   watermark: "",
@@ -122,6 +130,8 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
   const [progress, setProgress] = useState<{ percent: number; stage: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [outputs, setOutputs] = useState<string[] | null>(null);
+  const [timestamps, setTimestamps] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const previewRef = useRef<HTMLCanvasElement>(null);
@@ -272,6 +282,15 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
   const makeLabel = (i: number) =>
     prefs.labelTemplate.replace(/\{n\}/g, String(prefs.startNumber + i));
   const previewChapter = selectedChapters[0] ?? completedChapters[0];
+  const isMerged = prefs.videoMode === "merged";
+  // Gộp nhiều chương: nhãn là khoảng số thứ tự, vd "Phần 1-3"
+  const mergedLabel = prefs.labelTemplate.replace(
+    /\{n\}/g,
+    selectedChapters.length > 1
+      ? `${prefs.startNumber}-${prefs.startNumber + selectedChapters.length - 1}`
+      : String(prefs.startNumber)
+  );
+  const labelAt = (i: number) => (isMerged ? mergedLabel : makeLabel(i));
 
   // Preview thumbnail (debounce để không vẽ lại liên tục khi đang gõ)
   useEffect(() => {
@@ -283,8 +302,8 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
           background: bgDataUrl,
           template: prefs.template,
           title: prefs.title || activeProject?.title || "Tiêu đề",
-          label: makeLabel(0),
-          chapterTitle: prefs.showChapterTitle ? previewChapter?.title : undefined,
+          label: labelAt(0),
+          chapterTitle: prefs.showChapterTitle && !isMerged ? previewChapter?.title : undefined,
           channel: prefs.channel || undefined,
           offsets: prefs.offsets[prefs.template],
           font: prefs.font,
@@ -321,7 +340,7 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, bgDataUrl, logoDataUrl, previewView, prefs, activeId, selectedId, previewChapter?.title, activeProject?.title]);
+  }, [isOpen, bgDataUrl, logoDataUrl, previewView, prefs, activeId, selectedId, previewChapter?.title, activeProject?.title, selectedChapters.length]);
 
   if (!isOpen) return null;
 
@@ -403,7 +422,7 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
   const availableElements: ThumbnailElementId[] = [
     "label",
     "title",
-    ...(prefs.showChapterTitle ? (["chapter"] as const) : []),
+    ...(prefs.showChapterTitle && !isMerged ? (["chapter"] as const) : []),
     ...(prefs.channel.trim() ? (["channel"] as const) : []),
     ...(logoDataUrl && (previewView === "video" || prefs.logoOnThumbnail) ? (["logo"] as const) : []),
     ...(previewView === "video"
@@ -473,6 +492,15 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
   const toggleChapter = (id: string) =>
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
+  const formatTimestamp = (ms: number) => {
+    const total = Math.floor(ms / 1000);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const sec = total % 60;
+    const mm = String(m).padStart(2, "0");
+    return h > 0 ? `${h}:${mm}:${String(sec).padStart(2, "0")}` : `${mm}:${String(sec).padStart(2, "0")}`;
+  };
+
   const handleExport = async () => {
     if (!activeProject || selectedChapters.length === 0 || !outputDir.trim()) return;
     setIsExporting(true);
@@ -482,59 +510,86 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
     const done: string[] = [];
     const total = selectedChapters.length;
     const bookTitle = (prefs.title || activeProject.title).trim();
+
+    // Dựng ảnh cho một video: thumbnail, khung video (thêm watermark/ghi chú/nền băng chữ) và ảnh chữ chạy
+    const buildVisuals = async (label: string, chapterTitle?: string): Promise<VideoVisualsInput> => {
+      const common = {
+        background: bgDataUrl,
+        template: prefs.template,
+        title: bookTitle,
+        label,
+        chapterTitle,
+        channel: prefs.channel || undefined,
+        offsets: prefs.offsets[prefs.template],
+        font: prefs.font,
+        logo: logoDataUrl,
+        logoOnThumbnail: prefs.logoOnThumbnail,
+        watermark: prefs.watermark,
+        note: prefs.note,
+        marqueeText: prefs.marqueeText,
+      };
+      const thumb = await renderThumbnail({ ...common, view: "thumbnail" });
+      const frame = await renderThumbnail({ ...common, view: "video", marqueeStaticText: false });
+      const strip = await renderMarqueeStrip(common);
+      return {
+        imageBase64: canvasToJpegDataUrl(frame.canvas),
+        thumbnailBase64: canvasToJpegDataUrl(thumb.canvas),
+        marquee: strip
+          ? {
+              pngBase64: strip.dataUrl,
+              top: strip.top,
+              rtl: prefs.marqueeDirection === "rtl",
+              speedPxPerSec: prefs.marqueeSpeed,
+            }
+          : undefined,
+      };
+    };
+    const fileNameFor = (label: string) =>
+      `${bookTitle} - ${label}`.replace(/[/\\:*?"<>|]/g, "_");
+
     try {
-      for (let i = 0; i < total; i++) {
-        const chapter = selectedChapters[i];
-        const label = makeLabel(i);
-        const common = {
-          background: bgDataUrl,
-          template: prefs.template,
-          title: bookTitle,
-          label,
-          chapterTitle: prefs.showChapterTitle ? chapter.title : undefined,
-          channel: prefs.channel || undefined,
-          offsets: prefs.offsets[prefs.template],
-          font: prefs.font,
-          logo: logoDataUrl,
-          logoOnThumbnail: prefs.logoOnThumbnail,
-          watermark: prefs.watermark,
-          note: prefs.note,
-          marqueeText: prefs.marqueeText,
-        };
-        // Thumbnail (chỉ các khối chính) và khung video (thêm watermark, ghi chú, băng chữ chạy)
-        const thumb = await renderThumbnail({ ...common, view: "thumbnail" });
-        const frame = await renderThumbnail({ ...common, view: "video", marqueeStaticText: false });
-        const strip = await renderMarqueeStrip(common);
-        const fileName = `${bookTitle} - ${label}`.replace(/[/\\:*?"<>|]/g, "_");
-        const outputPath = joinPath(outputDir.trim(), `${fileName}.mp4`);
-        try {
-          await tauriExportChapterVideo({
-            chapterId: chapter.id,
-            outputPath,
-            imageBase64: canvasToJpegDataUrl(frame.canvas),
-            thumbnailBase64: canvasToJpegDataUrl(thumb.canvas),
-            marquee: strip
-              ? {
-                  pngBase64: strip.dataUrl,
-                  top: strip.top,
-                  rtl: prefs.marqueeDirection === "rtl",
-                  speedPxPerSec: prefs.marqueeSpeed,
-                }
-              : undefined,
-            sentencePauseMs,
-            paragraphPauseMs,
-            mixBgm: prefs.mixBgm,
-            progressBase: (i / total) * 100,
-            progressSpan: 100 / total,
-          });
-        } catch (err) {
-          throw new Error(
-            `Chương "${chapter.title}": ${err instanceof Error ? err.message : String(err)}`
-          );
+      if (isMerged) {
+        const outputPath = joinPath(outputDir.trim(), `${fileNameFor(mergedLabel)}.mp4`);
+        const result = await tauriExportBookVideo({
+          projectId: activeProject.id,
+          chapterIds: selectedChapters.map((c) => c.id),
+          outputPath,
+          visuals: await buildVisuals(mergedLabel),
+          sentencePauseMs,
+          paragraphPauseMs,
+          chapterPauseMs: prefs.chapterPauseMs,
+          mixBgm: prefs.mixBgm,
+        });
+        setTimestamps(
+          result.chapters.map((c) => `${formatTimestamp(c.start_ms)} ${c.title}`).join("\n")
+        );
+        setOutputs([outputPath]);
+      } else {
+        for (let i = 0; i < total; i++) {
+          const chapter = selectedChapters[i];
+          const label = makeLabel(i);
+          const outputPath = joinPath(outputDir.trim(), `${fileNameFor(label)}.mp4`);
+          try {
+            await tauriExportChapterVideo({
+              chapterId: chapter.id,
+              outputPath,
+              visuals: await buildVisuals(label, prefs.showChapterTitle ? chapter.title : undefined),
+              sentencePauseMs,
+              paragraphPauseMs,
+              mixBgm: prefs.mixBgm,
+              progressBase: (i / total) * 100,
+              progressSpan: 100 / total,
+            });
+          } catch (err) {
+            throw new Error(
+              `Chương "${chapter.title}": ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+          done.push(outputPath);
         }
-        done.push(outputPath);
+        setTimestamps(null);
+        setOutputs(done);
       }
-      setOutputs(done);
     } catch (err) {
       setMessage(
         `Lỗi xuất video${done.length ? ` (đã xong ${done.length}/${total} chương)` : ""}: ${
@@ -544,6 +599,17 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
     } finally {
       setIsExporting(false);
       setProgress(null);
+    }
+  };
+
+  const handleCopyTimestamps = async () => {
+    if (!timestamps) return;
+    try {
+      await navigator.clipboard.writeText(timestamps);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setActionError("Không sao chép được, anh bôi đen rồi copy thủ công nhé.");
     }
   };
 
@@ -558,6 +624,7 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
 
   const handleClose = () => {
     setOutputs(null);
+    setTimestamps(null);
     setActionError(null);
     setMessage(null);
     onClose();
@@ -572,11 +639,33 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
           </div>
           <h3 className="text-base font-semibold text-zinc-100">Xuất video thành công!</h3>
           <p className="text-xs text-zinc-400">
-            Đã tạo {outputs.length} video kèm thumbnail JPG cùng tên trong thư mục:
+            Đã tạo {outputs.length === 1 ? "1 video" : `${outputs.length} video`} kèm thumbnail JPG cùng tên trong thư mục:
           </p>
           <p className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-300 font-mono text-[11px] break-all">
             {outputDir}
           </p>
+          {timestamps && (
+            <div className="w-full space-y-1 text-left">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-zinc-400">
+                  Mốc thời gian các chương (dán vào mô tả YouTube):
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCopyTimestamps}
+                  className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px]"
+                >
+                  {copied ? "Đã chép" : "Sao chép"}
+                </button>
+              </div>
+              <textarea
+                readOnly
+                rows={Math.min(8, timestamps.split("\n").length)}
+                value={timestamps}
+                className="w-full px-2 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-300 font-mono text-[11px] resize-none"
+              />
+            </div>
+          )}
           {actionError && <p className="w-full text-[11px] text-rose-400">{actionError}</p>}
           <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
             <button
@@ -668,6 +757,47 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
               </button>
             )}
           </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handlePickBackground}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium"
+            >
+              <ImagePlus className="w-3.5 h-3.5 text-indigo-400" />
+              {prefs.bgPath ? "Đổi ảnh nền" : "Chọn ảnh nền"}
+            </button>
+            <span className="flex-1 truncate text-zinc-500 font-mono text-[11px]">
+              {prefs.bgPath || "Chưa chọn ảnh nền"}
+            </span>
+            {prefs.bgPath && (
+              <button
+                type="button"
+                onClick={() => updatePrefs({ bgPath: "" })}
+                className="text-zinc-500 hover:text-zinc-300"
+              >
+                Bỏ ảnh
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            {THUMBNAIL_TEMPLATES.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => updatePrefs({ template: t.id })}
+                className={`p-2 rounded-lg border text-center font-medium transition-all ${
+                  prefs.template === t.id
+                    ? "bg-indigo-950/50 border-indigo-500 text-zinc-100"
+                    : "bg-zinc-950 border-zinc-800 hover:border-zinc-700 text-zinc-400"
+                }`}
+              >
+                {t.name}
+              </button>
+            ))}
+          </div>
+
 
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-zinc-500 text-[11px] mr-1">Chọn khối để chỉnh:</span>
@@ -1019,14 +1149,16 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
           </div>
 
           <div className="flex flex-wrap gap-4 text-zinc-300">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={prefs.showChapterTitle}
-                onChange={(e) => updatePrefs({ showChapterTitle: e.target.checked })}
-              />
-              Hiện tên chương trên thumbnail
-            </label>
+            {!isMerged && (
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={prefs.showChapterTitle}
+                  onChange={(e) => updatePrefs({ showChapterTitle: e.target.checked })}
+                />
+                Hiện tên chương trên thumbnail
+              </label>
+            )}
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -1035,6 +1167,49 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
               />
               Trộn nhạc nền (BGM) của chương
             </label>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="block font-semibold text-zinc-300">Phạm vi xuất video</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  { id: "each", title: "Từng chương", desc: "Mỗi chương một video riêng" },
+                  { id: "merged", title: "Gộp thành 1 video", desc: "Nối các chương đã chọn, kèm mốc thời gian" },
+                ] as const
+              ).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => updatePrefs({ videoMode: m.id })}
+                  className={`p-2.5 rounded-lg border text-left transition-all ${
+                    prefs.videoMode === m.id
+                      ? "bg-indigo-950/50 border-indigo-500 ring-1 ring-indigo-500/50 text-zinc-100"
+                      : "bg-zinc-950 border-zinc-800 hover:border-zinc-700 text-zinc-400"
+                  }`}
+                >
+                  <div className="font-semibold">{m.title}</div>
+                  <div className="text-[11px] text-zinc-500">{m.desc}</div>
+                </button>
+              ))}
+            </div>
+            {isMerged && (
+              <div className="flex items-center gap-3 pt-1">
+                <span className="text-zinc-300">Khoảng nghỉ giữa các chương:</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={10000}
+                  step={100}
+                  value={prefs.chapterPauseMs}
+                  onChange={(e) => updatePrefs({ chapterPauseMs: Number(e.target.value) })}
+                  className="flex-1"
+                />
+                <span className="w-24 text-right font-mono text-cyan-400">
+                  {(prefs.chapterPauseMs / 1000).toFixed(1)} giây
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3 space-y-2">
@@ -1073,7 +1248,11 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
                   />
                   <span className="text-zinc-500">#{c.index}</span>
                   <span className="flex-1 truncate text-zinc-200">{c.title}</span>
-                  {order >= 0 && <span className="text-amber-400">{makeLabel(order)}</span>}
+                  {order >= 0 && (
+                    <span className="text-amber-400">
+                      {isMerged ? `Thứ ${order + 1}` : makeLabel(order)}
+                    </span>
+                  )}
                 </label>
               );
             })}
@@ -1140,7 +1319,11 @@ export const YoutubeModal: React.FC<YoutubeModalProps> = ({ isOpen, onClose }) =
             ) : (
               <>
                 <Film className="w-3.5 h-3.5" />
-                <span>Tạo {selectedChapters.length} video</span>
+                <span>
+                  {isMerged
+                    ? `Tạo 1 video (gộp ${selectedChapters.length} chương)`
+                    : `Tạo ${selectedChapters.length} video`}
+                </span>
               </>
             )}
           </button>

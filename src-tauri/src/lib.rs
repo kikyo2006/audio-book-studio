@@ -68,6 +68,7 @@ pub fn run() {
             commands::audio::read_audio_base64,
             commands::audio::open_path_default,
             commands::audio::export_chapter_video,
+            commands::audio::export_book_video,
             commands::audio::read_image_data_url,
             commands::audio::reveal_path_in_folder,
             commands::audio::cut_audio_region,

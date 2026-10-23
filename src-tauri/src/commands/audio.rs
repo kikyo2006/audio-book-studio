@@ -991,24 +991,107 @@ fn decode_image_base64(data: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// Xuất video MP4 (ảnh tĩnh + audio chương) và lưu thumbnail JPG cùng tên cạnh file video.
+/// Chữ chạy ngang: ảnh PNG trong suốt do frontend dựng sẵn.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarqueeInput {
+    png_base64: String,
+    top: i32,
+    rtl: bool,
+    speed_px_per_sec: f32,
+}
+
+/// Hình ảnh cho video: khung hình chính, thumbnail JPG lưu riêng và (tuỳ chọn) chữ chạy.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoVisuals {
+    image_base64: String,
+    /// Thumbnail JPG lưu cạnh video (không có watermark/chữ chạy); bỏ trống thì dùng luôn khung video
+    thumbnail_base64: Option<String>,
+    marquee: Option<MarqueeInput>,
+}
+
+struct DecodedVisuals {
+    image: Vec<u8>,
+    thumb: Vec<u8>,
+    marquee: Option<(Vec<u8>, i32, bool, f32)>,
+}
+
+fn decode_visuals(v: &VideoVisuals) -> Result<DecodedVisuals, String> {
+    let image = decode_image_base64(&v.image_base64)?;
+    let thumb = match v.thumbnail_base64.as_deref() {
+        Some(t) if !t.trim().is_empty() => decode_image_base64(t)?,
+        _ => image.clone(),
+    };
+    let marquee = match v.marquee.as_ref() {
+        Some(m) if !m.png_base64.trim().is_empty() => Some((
+            decode_image_base64(&m.png_base64)?,
+            m.top,
+            m.rtl,
+            m.speed_px_per_sec,
+        )),
+        _ => None,
+    };
+    Ok(DecodedVisuals { image, thumb, marquee })
+}
+
+/// Ghép hình + audio `wav` thành video MP4 ở `final_video` và lưu thumbnail JPG cùng tên.
+fn write_video(
+    visuals: &DecodedVisuals,
+    work_dir: &Path,
+    wav: &Path,
+    final_video: &Path,
+    on_progress: &dyn Fn(f32),
+) -> Result<(), String> {
+    let temp_img = work_dir.join("frame.jpg");
+    std::fs::write(&temp_img, &visuals.image)
+        .map_err(|e| format!("Không ghi được ảnh tạm: {}", e))?;
+
+    let marquee = match visuals.marquee.as_ref() {
+        Some((bytes, top, rtl, speed)) => {
+            let strip = work_dir.join("marquee.png");
+            std::fs::write(&strip, bytes)
+                .map_err(|e| format!("Không ghi được ảnh chữ chạy: {}", e))?;
+            Some(crate::services::audio::transcode::VideoMarquee {
+                strip,
+                top: *top,
+                rtl: *rtl,
+                speed_px_s: *speed,
+            })
+        }
+        None => None,
+    };
+
+    crate::services::audio::transcode::render_video(
+        &temp_img,
+        wav,
+        final_video,
+        marquee.as_ref(),
+        on_progress,
+    )?;
+    std::fs::write(final_video.with_extension("jpg"), &visuals.thumb)
+        .map_err(|e| format!("Không lưu được thumbnail: {}", e))
+}
+
+fn new_video_work_dir() -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join(format!("book_studio_video_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Không tạo được thư mục tạm: {}", e))?;
+    Ok(dir)
+}
+
+/// Xuất video MP4 (ảnh tĩnh + audio một chương) và lưu thumbnail JPG cùng tên cạnh file video.
 /// Tiến độ được báo trong khoảng [progress_base, progress_base + progress_span] phần trăm.
 #[tauri::command]
 pub async fn export_chapter_video(
     chapter_id: String,
     output_path: String,
-    image_base64: String,
+    visuals: VideoVisuals,
     sentence_pause_ms: u32,
     paragraph_pause_ms: u32,
     mix_bgm: Option<bool>,
     bgm_volume: Option<f32>,
     progress_base: Option<f32>,
     progress_span: Option<f32>,
-    thumbnail_base64: Option<String>,
-    marquee_png_base64: Option<String>,
-    marquee_top: Option<i32>,
-    marquee_rtl: Option<bool>,
-    marquee_speed: Option<f32>,
     app: AppHandle,
     db: State<'_, Arc<Database>>,
 ) -> Result<f64, String> {
@@ -1020,33 +1103,16 @@ pub async fn export_chapter_video(
         let report = |frac: f32, stage: &str| emit_progress(&app, base + frac * span, stage);
 
         report(0.0, "Đang ghép âm thanh");
-        let image_bytes = decode_image_base64(&image_base64)?;
-        // Thumbnail JPG lưu riêng (không có watermark/chữ chạy); không có thì dùng luôn khung video
-        let thumb_bytes = match thumbnail_base64.as_deref() {
-            Some(t) if !t.trim().is_empty() => decode_image_base64(t)?,
-            _ => image_bytes.clone(),
-        };
-        let marquee_bytes = match marquee_png_base64.as_deref() {
-            Some(m) if !m.trim().is_empty() => Some(decode_image_base64(m)?),
-            _ => None,
-        };
-
+        let decoded = decode_visuals(&visuals)?;
         let final_video = PathBuf::from(&output_path).with_extension("mp4");
-        let final_thumb = final_video.with_extension("jpg");
         if let Some(parent) = final_video.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Không tạo được thư mục xuất: {}", e))?;
         }
-
-        let work_dir = std::env::temp_dir().join(format!("book_studio_video_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&work_dir)
-            .map_err(|e| format!("Không tạo được thư mục tạm: {}", e))?;
+        let work_dir = new_video_work_dir()?;
         let temp_wav = work_dir.join("chapter.wav");
-        let temp_img = work_dir.join("thumb.jpg");
 
         let result = (|| -> Result<f64, String> {
-            std::fs::write(&temp_img, &image_bytes)
-                .map_err(|e| format!("Không ghi được ảnh tạm: {}", e))?;
             let opts = AudioConcatenateOptions {
                 sentence_pause_ms,
                 paragraph_pause_ms,
@@ -1060,32 +1126,114 @@ pub async fn export_chapter_video(
                 bgm_volume,
                 &temp_wav,
             )?;
-            let marquee = match marquee_bytes.as_ref() {
-                Some(bytes) => {
-                    let strip = work_dir.join("marquee.png");
-                    std::fs::write(&strip, bytes)
-                        .map_err(|e| format!("Không ghi được ảnh chữ chạy: {}", e))?;
-                    Some(crate::services::audio::transcode::VideoMarquee {
-                        strip,
-                        top: marquee_top.unwrap_or(0),
-                        rtl: marquee_rtl.unwrap_or(true),
-                        speed_px_s: marquee_speed.unwrap_or(120.0),
-                    })
-                }
-                None => None,
-            };
             report(0.4, "Đang tạo video");
-            crate::services::audio::transcode::render_video(
-                &temp_img,
-                &temp_wav,
-                &final_video,
-                marquee.as_ref(),
-                &|f| report(0.4 + f * 0.6, "Đang tạo video"),
-            )?;
-            std::fs::write(&final_thumb, &thumb_bytes)
-                .map_err(|e| format!("Không lưu được thumbnail: {}", e))?;
+            write_video(&decoded, &work_dir, &temp_wav, &final_video, &|f| {
+                report(0.4 + f * 0.6, "Đang tạo video")
+            })?;
             report(1.0, "Hoàn tất");
             Ok(duration)
+        })();
+
+        let _ = std::fs::remove_dir_all(&work_dir);
+        result
+    })
+    .await
+    .map_err(|e| format!("Task xuất video lỗi: {}", e))?
+}
+
+#[derive(serde::Serialize)]
+pub struct VideoChapterMark {
+    pub title: String,
+    pub start_ms: u64,
+}
+
+#[derive(serde::Serialize)]
+pub struct BookVideoResult {
+    pub duration: f64,
+    /// Mốc bắt đầu từng chương trong video (để dán vào mô tả YouTube)
+    pub chapters: Vec<VideoChapterMark>,
+}
+
+/// Nối nhiều chương thành MỘT video MP4 (có khoảng nghỉ giữa các chương) kèm thumbnail JPG cùng tên.
+#[tauri::command]
+pub async fn export_book_video(
+    project_id: String,
+    chapter_ids: Vec<String>,
+    output_path: String,
+    visuals: VideoVisuals,
+    sentence_pause_ms: u32,
+    paragraph_pause_ms: u32,
+    chapter_pause_ms: u32,
+    mix_bgm: Option<bool>,
+    bgm_volume: Option<f32>,
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+) -> Result<BookVideoResult, String> {
+    let db = db.inner().clone();
+
+    tokio::task::spawn_blocking(move || {
+        let report = |percent: f32, stage: &str| emit_progress(&app, percent, stage);
+        report(0.0, "Đang chuẩn bị");
+
+        let chapters: Vec<_> = db
+            .get_chapters(&project_id)?
+            .into_iter()
+            .filter(|c| c.is_enabled && chapter_ids.contains(&c.id))
+            .collect();
+        if chapters.is_empty() {
+            return Err("Không có chương nào được chọn (và đang bật) để xuất.".to_string());
+        }
+
+        let decoded = decode_visuals(&visuals)?;
+        let final_video = PathBuf::from(&output_path).with_extension("mp4");
+        if let Some(parent) = final_video.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Không tạo được thư mục xuất: {}", e))?;
+        }
+        let work_dir = new_video_work_dir()?;
+
+        let result = (|| -> Result<BookVideoResult, String> {
+            let opts = AudioConcatenateOptions {
+                sentence_pause_ms,
+                paragraph_pause_ms,
+                ..Default::default()
+            };
+
+            // 1) Ghép audio từng chương ra WAV tạm (0-40%)
+            let mut wavs: Vec<PathBuf> = Vec::new();
+            let mut titles: Vec<String> = Vec::new();
+            for (i, chap) in chapters.iter().enumerate() {
+                report(
+                    i as f32 / chapters.len() as f32 * 40.0,
+                    &format!("Đang xử lý chương {}/{}", i + 1, chapters.len()),
+                );
+                let wav = work_dir.join(format!("chap_{:04}.wav", i));
+                render_chapter_wav(&db, &chap.id, &opts, mix_bgm.unwrap_or(false), bgm_volume, &wav)
+                    .map_err(|e| format!("Chương \"{}\": {}", chap.title, e))?;
+                wavs.push(wav);
+                titles.push(chap.title.clone());
+            }
+
+            // 2) Nối các chương thành 1 file master (40-50%)
+            report(40.0, "Đang nối các chương");
+            let master = work_dir.join("master.wav");
+            let duration =
+                crate::services::audio::concatenate_wav_files(&wavs, &master, chapter_pause_ms)?;
+
+            let mut marks = Vec::new();
+            let mut cursor_ms = 0u64;
+            for (wav, title) in wavs.iter().zip(titles.iter()) {
+                marks.push(VideoChapterMark { title: title.clone(), start_ms: cursor_ms });
+                cursor_ms += wav_duration_ms(wav).unwrap_or(0) + chapter_pause_ms as u64;
+            }
+
+            // 3) Tạo video (50-100%)
+            report(50.0, "Đang tạo video");
+            write_video(&decoded, &work_dir, &master, &final_video, &|f| {
+                report(50.0 + f * 50.0, "Đang tạo video")
+            })?;
+            report(100.0, "Hoàn tất");
+            Ok(BookVideoResult { duration, chapters: marks })
         })();
 
         let _ = std::fs::remove_dir_all(&work_dir);

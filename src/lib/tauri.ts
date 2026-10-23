@@ -305,35 +305,72 @@ export async function tauriReadImageDataUrl(path: string): Promise<string> {
   return await invoke<string>("read_image_data_url", { path });
 }
 
+export interface VideoVisualsInput {
+  /** Khung hình chính của video (JPG data URL) */
+  imageBase64: string;
+  /** Thumbnail JPG lưu riêng; bỏ trống thì dùng luôn khung video */
+  thumbnailBase64?: string;
+  marquee?: { pngBase64: string; top: number; rtl: boolean; speedPxPerSec: number };
+}
+
+function toVisualsPayload(v: VideoVisualsInput) {
+  return {
+    imageBase64: v.imageBase64,
+    thumbnailBase64: v.thumbnailBase64 ?? null,
+    marquee: v.marquee ?? null,
+  };
+}
+
 export async function tauriExportChapterVideo(params: {
   chapterId: string;
   outputPath: string;
-  imageBase64: string;
+  visuals: VideoVisualsInput;
   sentencePauseMs: number;
   paragraphPauseMs: number;
   mixBgm?: boolean;
   progressBase?: number;
   progressSpan?: number;
-  /** Thumbnail JPG lưu riêng; bỏ trống thì dùng luôn khung video */
-  thumbnailBase64?: string;
-  marquee?: { pngBase64: string; top: number; rtl: boolean; speedPxPerSec: number };
 }): Promise<number> {
   if (!isTauriEnvironment()) throw new Error("Xuất video cần backend Tauri");
   return await invoke<number>("export_chapter_video", {
     chapterId: params.chapterId,
     outputPath: params.outputPath,
-    imageBase64: params.imageBase64,
+    visuals: toVisualsPayload(params.visuals),
     sentencePauseMs: params.sentencePauseMs,
     paragraphPauseMs: params.paragraphPauseMs,
     mixBgm: params.mixBgm ?? false,
     bgmVolume: null,
     progressBase: params.progressBase ?? 0,
     progressSpan: params.progressSpan ?? 100,
-    thumbnailBase64: params.thumbnailBase64 ?? null,
-    marqueePngBase64: params.marquee?.pngBase64 ?? null,
-    marqueeTop: params.marquee?.top ?? null,
-    marqueeRtl: params.marquee?.rtl ?? null,
-    marqueeSpeed: params.marquee?.speedPxPerSec ?? null,
+  });
+}
+
+export interface BookVideoResult {
+  duration: number;
+  chapters: { title: string; start_ms: number }[];
+}
+
+export async function tauriExportBookVideo(params: {
+  projectId: string;
+  chapterIds: string[];
+  outputPath: string;
+  visuals: VideoVisualsInput;
+  sentencePauseMs: number;
+  paragraphPauseMs: number;
+  chapterPauseMs: number;
+  mixBgm?: boolean;
+}): Promise<BookVideoResult> {
+  if (!isTauriEnvironment()) throw new Error("Xuất video cần backend Tauri");
+  return await invoke<BookVideoResult>("export_book_video", {
+    projectId: params.projectId,
+    chapterIds: params.chapterIds,
+    outputPath: params.outputPath,
+    visuals: toVisualsPayload(params.visuals),
+    sentencePauseMs: params.sentencePauseMs,
+    paragraphPauseMs: params.paragraphPauseMs,
+    chapterPauseMs: params.chapterPauseMs,
+    mixBgm: params.mixBgm ?? false,
+    bgmVolume: null,
   });
 }
 
