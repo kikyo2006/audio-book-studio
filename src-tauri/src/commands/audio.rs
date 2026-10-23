@@ -923,3 +923,198 @@ pub fn reveal_path_in_folder(path: String) -> Result<(), String> {
     };
     spawn_os_open(cmd)
 }
+
+/// Ghép các câu đã sinh âm của một chương thành 1 file WAV (có hoặc không trộn BGM của chương).
+fn render_chapter_wav(
+    db: &Database,
+    chapter_id: &str,
+    opts: &AudioConcatenateOptions,
+    mix_bgm: bool,
+    bgm_volume: Option<f32>,
+    target: &Path,
+) -> Result<f64, String> {
+    let chapter = db.get_chapter_by_id(chapter_id)?;
+    if let Some(c) = chapter.as_ref() {
+        if !c.is_enabled {
+            return Err("Chương này đang bị vô hiệu hóa (disabled), không thể xuất.".to_string());
+        }
+    }
+
+    let mut audio_items: Vec<(PathBuf, f32)> = Vec::new();
+    let mut item_kinds: Vec<ItemKind> = Vec::new();
+    for s in db.get_sentences(chapter_id)? {
+        let kind = item_kind_from_text(&s.clean_text);
+        if let Some(path_str) = s.audio_path {
+            let p = PathBuf::from(path_str);
+            if p.exists() {
+                audio_items.push((p, s.speed.unwrap_or(1.0)));
+                item_kinds.push(kind);
+            }
+        }
+    }
+    if audio_items.is_empty() {
+        return Err("Không có file âm thanh nào đã được tạo trong chương này".to_string());
+    }
+
+    let bgm_path = if mix_bgm {
+        chapter.as_ref().and_then(|c| c.bgm_path.as_ref()).map(PathBuf::from)
+    } else {
+        None
+    };
+    let vol = if bgm_path.is_some() {
+        bgm_volume.unwrap_or_else(|| {
+            chapter.as_ref().and_then(|c| c.bgm_volume).unwrap_or(0.2) as f32
+        })
+    } else {
+        0.0
+    };
+
+    crate::services::audio::concatenate_sentence_wavs_with_bgm(
+        &audio_items,
+        &item_kinds,
+        target,
+        opts,
+        bgm_path.as_deref(),
+        vol,
+    )
+}
+
+fn decode_image_base64(data: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    let payload = data.split_once("base64,").map(|(_, b)| b).unwrap_or(data);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload.trim())
+        .map_err(|e| format!("Ảnh thumbnail không hợp lệ: {}", e))?;
+    if bytes.is_empty() {
+        return Err("Ảnh thumbnail rỗng.".to_string());
+    }
+    Ok(bytes)
+}
+
+/// Xuất video MP4 (ảnh tĩnh + audio chương) và lưu thumbnail JPG cùng tên cạnh file video.
+/// Tiến độ được báo trong khoảng [progress_base, progress_base + progress_span] phần trăm.
+#[tauri::command]
+pub async fn export_chapter_video(
+    chapter_id: String,
+    output_path: String,
+    image_base64: String,
+    sentence_pause_ms: u32,
+    paragraph_pause_ms: u32,
+    mix_bgm: Option<bool>,
+    bgm_volume: Option<f32>,
+    progress_base: Option<f32>,
+    progress_span: Option<f32>,
+    thumbnail_base64: Option<String>,
+    marquee_png_base64: Option<String>,
+    marquee_top: Option<i32>,
+    marquee_rtl: Option<bool>,
+    marquee_speed: Option<f32>,
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+) -> Result<f64, String> {
+    let db = db.inner().clone();
+
+    tokio::task::spawn_blocking(move || {
+        let base = progress_base.unwrap_or(0.0);
+        let span = progress_span.unwrap_or(100.0);
+        let report = |frac: f32, stage: &str| emit_progress(&app, base + frac * span, stage);
+
+        report(0.0, "Đang ghép âm thanh");
+        let image_bytes = decode_image_base64(&image_base64)?;
+        // Thumbnail JPG lưu riêng (không có watermark/chữ chạy); không có thì dùng luôn khung video
+        let thumb_bytes = match thumbnail_base64.as_deref() {
+            Some(t) if !t.trim().is_empty() => decode_image_base64(t)?,
+            _ => image_bytes.clone(),
+        };
+        let marquee_bytes = match marquee_png_base64.as_deref() {
+            Some(m) if !m.trim().is_empty() => Some(decode_image_base64(m)?),
+            _ => None,
+        };
+
+        let final_video = PathBuf::from(&output_path).with_extension("mp4");
+        let final_thumb = final_video.with_extension("jpg");
+        if let Some(parent) = final_video.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Không tạo được thư mục xuất: {}", e))?;
+        }
+
+        let work_dir = std::env::temp_dir().join(format!("book_studio_video_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&work_dir)
+            .map_err(|e| format!("Không tạo được thư mục tạm: {}", e))?;
+        let temp_wav = work_dir.join("chapter.wav");
+        let temp_img = work_dir.join("thumb.jpg");
+
+        let result = (|| -> Result<f64, String> {
+            std::fs::write(&temp_img, &image_bytes)
+                .map_err(|e| format!("Không ghi được ảnh tạm: {}", e))?;
+            let opts = AudioConcatenateOptions {
+                sentence_pause_ms,
+                paragraph_pause_ms,
+                ..Default::default()
+            };
+            let duration = render_chapter_wav(
+                &db,
+                &chapter_id,
+                &opts,
+                mix_bgm.unwrap_or(false),
+                bgm_volume,
+                &temp_wav,
+            )?;
+            let marquee = match marquee_bytes.as_ref() {
+                Some(bytes) => {
+                    let strip = work_dir.join("marquee.png");
+                    std::fs::write(&strip, bytes)
+                        .map_err(|e| format!("Không ghi được ảnh chữ chạy: {}", e))?;
+                    Some(crate::services::audio::transcode::VideoMarquee {
+                        strip,
+                        top: marquee_top.unwrap_or(0),
+                        rtl: marquee_rtl.unwrap_or(true),
+                        speed_px_s: marquee_speed.unwrap_or(120.0),
+                    })
+                }
+                None => None,
+            };
+            report(0.4, "Đang tạo video");
+            crate::services::audio::transcode::render_video(
+                &temp_img,
+                &temp_wav,
+                &final_video,
+                marquee.as_ref(),
+                &|f| report(0.4 + f * 0.6, "Đang tạo video"),
+            )?;
+            std::fs::write(&final_thumb, &thumb_bytes)
+                .map_err(|e| format!("Không lưu được thumbnail: {}", e))?;
+            report(1.0, "Hoàn tất");
+            Ok(duration)
+        })();
+
+        let _ = std::fs::remove_dir_all(&work_dir);
+        result
+    })
+    .await
+    .map_err(|e| format!("Task xuất video lỗi: {}", e))?
+}
+
+/// Đọc file ảnh thành data URL (dùng để nạp ảnh nền vào canvas).
+#[tauri::command]
+pub fn read_image_data_url(path: String) -> Result<String, String> {
+    use base64::Engine;
+    let p = Path::new(&path);
+    let mime = match p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => return Err("Chỉ hỗ trợ ảnh PNG, JPG, WEBP.".to_string()),
+    };
+    let bytes = std::fs::read(p).map_err(|e| format!("Không đọc được ảnh ({}): {}", path, e))?;
+    Ok(format!(
+        "data:{};base64,{}",
+        mime,
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}

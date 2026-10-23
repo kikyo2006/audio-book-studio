@@ -222,52 +222,139 @@ pub fn transcode_wav(
     }
 
     cmd.arg(target);
-    hide_console(&mut cmd);
-
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let total_ms = wav_duration_ms(wav).unwrap_or(0).max(1) as f64;
-    let run = (|| -> Result<(bool, String), String> {
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Không chạy được FFmpeg ({}): {}", ffmpeg.display(), e))?;
-        let stderr_pipe = child.stderr.take();
-        let stderr_thread = std::thread::spawn(move || {
-            let mut buf = String::new();
-            if let Some(mut s) = stderr_pipe {
-                let _ = s.read_to_string(&mut buf);
-            }
-            buf
-        });
-        if let Some(out) = child.stdout.take() {
-            for line in BufReader::new(out).lines().map_while(Result::ok) {
-                // out_time_us / out_time_ms đều tính bằng micro giây
-                if let Some(v) = line
-                    .strip_prefix("out_time_us=")
-                    .or_else(|| line.strip_prefix("out_time_ms="))
-                {
-                    if let Ok(us) = v.trim().parse::<i64>() {
-                        on_progress(((us.max(0) as f64 / 1000.0) / total_ms).clamp(0.0, 1.0) as f32);
-                    }
-                }
-            }
-        }
-        let status = child.wait().map_err(|e| format!("Lỗi chờ FFmpeg: {}", e))?;
-        Ok((status.success(), stderr_thread.join().unwrap_or_default()))
-    })();
+    let result = run_with_progress(cmd, &ffmpeg, total_ms, target, on_progress);
 
     if let Some(mf) = meta_file {
         let _ = std::fs::remove_file(mf);
     }
+    result
+}
 
-    let (ok, stderr) = run?;
-    if !ok {
+/// Chạy FFmpeg đã dựng sẵn lệnh, đọc `-progress` để báo % (0..1) theo `total_ms`.
+/// Nếu lỗi sẽ xóa `target` dở dang và trả về vài dòng cuối của stderr.
+fn run_with_progress(
+    mut cmd: Command,
+    ffmpeg: &Path,
+    total_ms: f64,
+    target: &Path,
+    on_progress: &dyn Fn(f32),
+) -> Result<(), String> {
+    hide_console(&mut cmd);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Không chạy được FFmpeg ({}): {}", ffmpeg.display(), e))?;
+    let stderr_pipe = child.stderr.take();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut s) = stderr_pipe {
+            let _ = s.read_to_string(&mut buf);
+        }
+        buf
+    });
+    if let Some(out) = child.stdout.take() {
+        for line in BufReader::new(out).lines().map_while(Result::ok) {
+            // out_time_us / out_time_ms đều tính bằng micro giây
+            if let Some(v) = line
+                .strip_prefix("out_time_us=")
+                .or_else(|| line.strip_prefix("out_time_ms="))
+            {
+                if let Ok(us) = v.trim().parse::<i64>() {
+                    on_progress(((us.max(0) as f64 / 1000.0) / total_ms).clamp(0.0, 1.0) as f32);
+                }
+            }
+        }
+    }
+    let status = child.wait().map_err(|e| format!("Lỗi chờ FFmpeg: {}", e))?;
+    let stderr = stderr_thread.join().unwrap_or_default();
+
+    if !status.success() {
         let _ = std::fs::remove_file(target);
         let tail: Vec<&str> = stderr.lines().rev().take(5).collect();
         let tail: Vec<&str> = tail.into_iter().rev().collect();
         return Err(format!("FFmpeg chuyển đổi thất bại: {}", tail.join(" | ")));
     }
     Ok(())
+}
+
+/// Chọn encoder H.264 có trong bản FFmpeg đang dùng: libx264 (bản GPL) rồi libopenh264 (bản LGPL).
+fn pick_h264_encoder(ffmpeg: &Path) -> Result<&'static str, String> {
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(["-hide_banner", "-encoders"]);
+    hide_console(&mut cmd);
+    let out = cmd
+        .output()
+        .map_err(|e| format!("Không chạy được FFmpeg ({}): {}", ffmpeg.display(), e))?;
+    let list = String::from_utf8_lossy(&out.stdout);
+    ["libx264", "libopenh264"]
+        .into_iter()
+        .find(|name| list.lines().any(|l| l.split_whitespace().nth(1) == Some(*name)))
+        .ok_or_else(|| "Bản FFmpeg này không có encoder H.264 (libx264 / libopenh264).".to_string())
+}
+
+/// Băng chữ chạy ngang khung video (ảnh PNG trong suốt do frontend dựng sẵn).
+pub struct VideoMarquee {
+    pub strip: PathBuf,
+    /// Toạ độ y của mép trên băng chữ trên khung hình
+    pub top: i32,
+    /// true: chạy từ phải sang trái; false: từ trái sang phải
+    pub rtl: bool,
+    /// Tốc độ chạy (pixel / giây)
+    pub speed_px_s: f32,
+}
+
+/// Ghép ảnh tĩnh + audio WAV thành video MP4 (H.264 + AAC) để upload YouTube.
+/// Có `marquee` thì thêm băng chữ chạy ngang (khung hình 20 fps cho mượt, không có thì 2 fps).
+pub fn render_video(
+    image: &Path,
+    wav: &Path,
+    target: &Path,
+    marquee: Option<&VideoMarquee>,
+    on_progress: &dyn Fn(f32),
+) -> Result<(), String> {
+    let ffmpeg = find_ffmpeg()?;
+    let encoder = pick_h264_encoder(&ffmpeg)?;
+
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Không tạo được thư mục xuất: {}", e))?;
+    }
+
+    let mut cmd = Command::new(&ffmpeg);
+    cmd.args(["-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-y"]);
+    let fps = if marquee.is_some() { "20" } else { "2" };
+    cmd.args(["-loop", "1", "-framerate", fps, "-i"]).arg(image);
+    cmd.arg("-i").arg(wav);
+    if let Some(m) = marquee {
+        cmd.args(["-loop", "1", "-framerate", fps, "-i"]).arg(&m.strip);
+        let speed = m.speed_px_s.clamp(10.0, 1000.0);
+        let x = if m.rtl {
+            format!("W-mod(t*{speed},W+w)")
+        } else {
+            format!("mod(t*{speed},W+w)-w")
+        };
+        cmd.args(["-filter_complex"]).arg(format!(
+            "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[bg];[bg][2:v]overlay=x='{x}':y={}:shortest=1,format=yuv420p[v]",
+            m.top
+        ));
+        cmd.args(["-map", "[v]", "-map", "1:a"]);
+    } else {
+        cmd.args(["-map", "0:v", "-map", "1:a"]);
+        cmd.args(["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"]);
+    }
+    if encoder == "libx264" {
+        cmd.args(["-c:v", "libx264", "-tune", "stillimage", "-preset", "veryfast", "-crf", "23"]);
+    } else {
+        cmd.args(["-c:v", "libopenh264", "-b:v", "800k"]);
+    }
+    cmd.args(["-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart"]);
+    cmd.arg(target);
+
+    let total_ms = wav_duration_ms(wav).unwrap_or(0).max(1) as f64;
+    run_with_progress(cmd, &ffmpeg, total_ms, target, on_progress)
 }
 
 /// Hoàn tất xuất: nếu định dạng khác WAV thì chuyển từ `wav` (file tạm) sang `target`, sau đó xóa file tạm.
@@ -347,6 +434,100 @@ mod tests {
         let info = String::from_utf8_lossy(&out.stderr);
         assert!(info.contains("Chapter #0:0") && info.contains("Chapter #0:1"), "{}", info);
         assert!(info.contains("Chương 2"), "{}", info);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn render_video_has_h264_and_aac() {
+        let Some(ff) = bundled_ffmpeg() else { return };
+        unsafe { std::env::set_var("FFMPEG_PATH", &ff) };
+
+        let dir = std::env::temp_dir().join(format!("video_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let wav = dir.join("in.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 24000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        for i in 0..72000 {
+            w.write_sample(((i as f32 * 0.05).sin() * 8000.0) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+
+        let img = dir.join("thumb.jpg");
+        let made = Command::new(&ff)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=1280x720", "-frames:v", "1"])
+            .arg(&img)
+            .status()
+            .unwrap();
+        assert!(made.success());
+
+        let mp4 = dir.join("out.mp4");
+        let progress = std::sync::Mutex::new(Vec::<f32>::new());
+        render_video(&img, &wav, &mp4, None, &|f| progress.lock().unwrap().push(f)).unwrap();
+        assert!(!progress.lock().unwrap().is_empty());
+
+        let out = Command::new(&ff).args(["-hide_banner", "-i"]).arg(&mp4).output().unwrap();
+        let info = String::from_utf8_lossy(&out.stderr);
+        assert!(info.contains("Video: h264"), "{}", info);
+        assert!(info.contains("Audio: aac"), "{}", info);
+        assert!(info.contains("Duration: 00:00:03"), "{}", info);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn render_video_with_scrolling_marquee_moves() {
+        let Some(ff) = bundled_ffmpeg() else { return };
+        unsafe { std::env::set_var("FFMPEG_PATH", &ff) };
+
+        let dir = std::env::temp_dir().join(format!("marquee_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let wav = dir.join("in.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 24000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        for i in 0..96000 {
+            w.write_sample(((i as f32 * 0.05).sin() * 8000.0) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+
+        let run = |args: &[&str]| {
+            let st = Command::new(&ff)
+                .args(["-hide_banner", "-loglevel", "error", "-y"])
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success());
+        };
+        let img = dir.join("bg.jpg");
+        run(&["-f", "lavfi", "-i", "color=c=black:s=1280x720", "-frames:v", "1", img.to_str().unwrap()]);
+        let strip = dir.join("strip.png");
+        run(&["-f", "lavfi", "-i", "color=c=white:s=300x40", "-frames:v", "1", strip.to_str().unwrap()]);
+
+        for rtl in [true, false] {
+            let mp4 = dir.join(format!("out_{}.mp4", rtl));
+            let m = VideoMarquee { strip: strip.clone(), top: 600, rtl, speed_px_s: 200.0 };
+            render_video(&img, &wav, &mp4, Some(&m), &|_| {}).unwrap();
+
+            // Hai khung hình ở hai thời điểm khác nhau phải khác nhau (băng chữ đã dịch chuyển)
+            let f1 = dir.join(format!("f1_{}.png", rtl));
+            let f2 = dir.join(format!("f2_{}.png", rtl));
+            for (t, f) in [("1", &f1), ("2", &f2)] {
+                run(&["-ss", t, "-i", mp4.to_str().unwrap(), "-frames:v", "1", f.to_str().unwrap()]);
+            }
+            assert_ne!(std::fs::read(&f1).unwrap(), std::fs::read(&f2).unwrap(), "marquee không chuyển động (rtl={})", rtl);
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

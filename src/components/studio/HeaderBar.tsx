@@ -22,6 +22,7 @@ import {
   Trash2,
   ArchiveX,
   BookCheck,
+  Film,
 } from "lucide-react";
 import { AppMenuBar } from "./AppMenuBar";
 import { useTtsHealth } from "@/hooks/useTtsHealth";
@@ -41,6 +42,7 @@ interface HeaderBarProps {
   onOpenVoiceSettings: () => void;
   onOpenCharacterCasting: () => void;
   onOpenExport: () => void;
+  onOpenYoutube?: () => void;
   onOpenSplitChapter?: () => void;
   onOpenInsertModal?: () => void;
   onOpenShortcutsHelp?: () => void;
@@ -54,6 +56,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onOpenVoiceSettings,
   onOpenCharacterCasting,
   onOpenExport,
+  onOpenYoutube,
   onOpenSplitChapter,
   onOpenInsertModal,
   onOpenShortcutsHelp,
@@ -500,6 +503,18 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
               <Download className="w-3.5 h-3.5 text-indigo-400" />
               <span>Xuất Audio</span>
             </button>
+
+            {onOpenYoutube && (
+              <button
+                type="button"
+                onClick={onOpenYoutube}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700/60 transition-colors"
+                title="Tạo thumbnail và video YouTube cho từng chương"
+              >
+                <Film className="w-3.5 h-3.5 text-rose-400" />
+                <span>Video YouTube</span>
+              </button>
+            )}
 
             {/* Project Status Badge / Toggle */}
             {activeProject.status === "completed" ? (

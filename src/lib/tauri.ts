@@ -285,6 +285,58 @@ export async function tauriExportBatchChapters(params: {
   });
 }
 
+export async function tauriSelectImageFile(title = "Chọn ảnh nền thumbnail"): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const selected = await open({
+      multiple: false,
+      title,
+      filters: [{ name: "Ảnh (*.png, *.jpg, *.webp)", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    return typeof selected === "string" ? selected : null;
+  } catch (err) {
+    console.error("Lỗi khi mở hộp thoại chọn ảnh:", err);
+    return null;
+  }
+}
+
+export async function tauriReadImageDataUrl(path: string): Promise<string> {
+  if (!isTauriEnvironment()) throw new Error("Cần backend Tauri để đọc ảnh");
+  return await invoke<string>("read_image_data_url", { path });
+}
+
+export async function tauriExportChapterVideo(params: {
+  chapterId: string;
+  outputPath: string;
+  imageBase64: string;
+  sentencePauseMs: number;
+  paragraphPauseMs: number;
+  mixBgm?: boolean;
+  progressBase?: number;
+  progressSpan?: number;
+  /** Thumbnail JPG lưu riêng; bỏ trống thì dùng luôn khung video */
+  thumbnailBase64?: string;
+  marquee?: { pngBase64: string; top: number; rtl: boolean; speedPxPerSec: number };
+}): Promise<number> {
+  if (!isTauriEnvironment()) throw new Error("Xuất video cần backend Tauri");
+  return await invoke<number>("export_chapter_video", {
+    chapterId: params.chapterId,
+    outputPath: params.outputPath,
+    imageBase64: params.imageBase64,
+    sentencePauseMs: params.sentencePauseMs,
+    paragraphPauseMs: params.paragraphPauseMs,
+    mixBgm: params.mixBgm ?? false,
+    bgmVolume: null,
+    progressBase: params.progressBase ?? 0,
+    progressSpan: params.progressSpan ?? 100,
+    thumbnailBase64: params.thumbnailBase64 ?? null,
+    marqueePngBase64: params.marquee?.pngBase64 ?? null,
+    marqueeTop: params.marquee?.top ?? null,
+    marqueeRtl: params.marquee?.rtl ?? null,
+    marqueeSpeed: params.marquee?.speedPxPerSec ?? null,
+  });
+}
+
 export async function tauriOpenPath(path: string): Promise<void> {
   if (!isTauriEnvironment()) return;
   await invoke("open_path_default", { path });

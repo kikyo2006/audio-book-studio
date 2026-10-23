@@ -27,6 +27,7 @@ import { SentenceTable } from "@/components/studio/SentenceTable";
 import { WaveformPanel } from "@/components/studio/WaveformPanel";
 import { VoiceModal } from "@/components/studio/VoiceModal";
 import { ExportModal } from "@/components/studio/ExportModal";
+import { YoutubeModal } from "@/components/studio/YoutubeModal";
 import { ImportModal } from "@/components/studio/ImportModal";
 import { CharacterModal } from "@/components/studio/CharacterModal";
 import { SplitChapterModal } from "@/components/studio/SplitChapterModal";
@@ -78,6 +79,7 @@ export default function Home() {
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isVoiceOpen, setIsVoiceOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
+  const [isYoutubeOpen, setIsYoutubeOpen] = useState(false);
   const [isCharacterOpen, setIsCharacterOpen] = useState(false);
   const [isSplitChapterOpen, setIsSplitChapterOpen] = useState(false);
   const [isInsertParagraphOpen, setIsInsertParagraphOpen] = useState(false);
@@ -444,6 +446,7 @@ export default function Home() {
           onOpenVoiceSettings={() => setIsVoiceOpen(true)}
           onOpenCharacterCasting={() => setIsCharacterOpen(true)}
           onOpenExport={() => setIsExportOpen(true)}
+          onOpenYoutube={() => setIsYoutubeOpen(true)}
           onOpenSplitChapter={() => setIsSplitChapterOpen(true)}
           onOpenInsertModal={() => setIsInsertParagraphOpen(true)}
           onOpenShortcutsHelp={() => setIsShortcutsOpen(true)}
@@ -925,6 +928,7 @@ export default function Home() {
       <VoiceModal isOpen={isVoiceOpen} onClose={() => setIsVoiceOpen(false)} />
       <CharacterModal isOpen={isCharacterOpen} onClose={() => setIsCharacterOpen(false)} />
       <ExportModal isOpen={isExportOpen} onClose={() => setIsExportOpen(false)} />
+      <YoutubeModal isOpen={isYoutubeOpen} onClose={() => setIsYoutubeOpen(false)} />
       <SplitChapterModal isOpen={isSplitChapterOpen} onClose={() => setIsSplitChapterOpen(false)} />
       <FindReplaceModal
         isOpen={isFindReplaceOpen}
