@@ -10,6 +10,7 @@ import type {
   ProjectMetadata,
   ProjectRoleSettings,
   SentenceItem,
+  TtsSentenceProgress,
   TtsSentenceResult,
 } from "@/types";
 
@@ -213,6 +214,8 @@ export async function tauriExportChapterAudio(params: {
   paragraphPauseMs: number;
   mixBgm?: boolean;
   bgmVolume?: number;
+  format?: "wav" | "mp3" | "m4b";
+  title?: string;
 }): Promise<number> {
   if (!isTauriEnvironment()) {
     throw new Error("Xuất audio cần backend Tauri");
@@ -225,6 +228,8 @@ export async function tauriExportChapterAudio(params: {
     paragraphPauseMs: params.paragraphPauseMs,
     mixBgm: params.mixBgm ?? false,
     bgmVolume: params.bgmVolume ?? null,
+    format: params.format ?? "wav",
+    title: params.title ?? null,
   });
 }
 
@@ -237,6 +242,8 @@ export async function tauriExportBookAudio(params: {
   mixBgm?: boolean;
   bgmVolume?: number;
   chapterIds?: string[];
+  format?: "wav" | "mp3" | "m4b";
+  title?: string;
 }): Promise<number> {
   if (!isTauriEnvironment()) {
     throw new Error("Xuất audio cần backend Tauri");
@@ -250,6 +257,8 @@ export async function tauriExportBookAudio(params: {
     mixBgm: params.mixBgm ?? false,
     bgmVolume: params.bgmVolume ?? null,
     chapterIds: params.chapterIds ?? null,
+    format: params.format ?? "wav",
+    title: params.title ?? null,
   });
 }
 
@@ -260,6 +269,7 @@ export async function tauriExportBatchChapters(params: {
   paragraphPauseMs: number;
   mixBgm?: boolean;
   bgmVolume?: number;
+  format?: "wav" | "mp3" | "m4b";
 }): Promise<import("@/types").BatchExportResult> {
   if (!isTauriEnvironment()) {
     throw new Error("Xuất hàng loạt audio cần backend Tauri");
@@ -271,7 +281,18 @@ export async function tauriExportBatchChapters(params: {
     paragraphPauseMs: params.paragraphPauseMs,
     mixBgm: params.mixBgm ?? false,
     bgmVolume: params.bgmVolume ?? null,
+    format: params.format ?? "wav",
   });
+}
+
+export async function tauriOpenPath(path: string): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  await invoke("open_path_default", { path });
+}
+
+export async function tauriRevealPath(path: string): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  await invoke("reveal_path_in_folder", { path });
 }
 
 export async function tauriSelectDirectory(): Promise<string | null> {
@@ -293,16 +314,22 @@ export async function tauriSelectDirectory(): Promise<string | null> {
 }
 
 export async function tauriSelectSaveAudioFile(
-  defaultPath?: string
+  defaultPath?: string,
+  format: "wav" | "mp3" | "m4b" = "wav"
 ): Promise<string | null> {
+  const filterNames = {
+    wav: "Audio WAV (*.wav)",
+    mp3: "Audio MP3 (*.mp3)",
+    m4b: "Audiobook M4B (*.m4b)",
+  };
   if (!isTauriEnvironment()) return null;
   try {
     const selected = await save({
       defaultPath,
       filters: [
         {
-          name: "Audio WAV (*.wav)",
-          extensions: ["wav"],
+          name: filterNames[format],
+          extensions: [format],
         },
       ],
       title: "Chọn vị trí và đặt tên file Audio",
@@ -873,6 +900,17 @@ export async function tauriListenProjectArchiveProgress(
   if (!isTauriEnvironment()) return () => {};
   const { listen } = await import("@tauri-apps/api/event");
   return await listen<ProjectArchiveProgress>("project-archive-progress", (e) =>
+    handler(e.payload)
+  );
+}
+
+/** Subscribe to sentence sub-segment TTS generation progress (e.g. 1/11). Returns the unsubscribe function. */
+export async function tauriListenSentenceProgress(
+  handler: (progress: TtsSentenceProgress) => void
+): Promise<() => void> {
+  if (!isTauriEnvironment()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return await listen<TtsSentenceProgress>("tts-sentence-progress", (e) =>
     handler(e.payload)
   );
 }

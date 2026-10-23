@@ -61,6 +61,7 @@ interface SentenceRowProps {
   editText: string;
   characters: CharacterProfile[];
   isServerOnline: boolean;
+  progress?: { current: number; total: number };
   searchQuery?: string;
   matchCase?: boolean;
   onRowClick: (item: SentenceItem) => void;
@@ -114,6 +115,7 @@ const SentenceRow = memo(function SentenceRow({
   editText,
   characters,
   isServerOnline,
+  progress,
   searchQuery,
   matchCase,
   onRowClick,
@@ -330,9 +332,13 @@ const SentenceRow = memo(function SentenceRow({
           )}
 
           {item.status === "generating" && (
-            <span className="flex items-center gap-1 text-[11px] text-amber-400 animate-pulse">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              Đang tạo...
+            <span className="flex items-center gap-1 text-[11px] text-amber-400 animate-pulse font-mono">
+              <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+              <span>
+                {progress && progress.total > 1
+                  ? `Đang tạo (${progress.current}/${progress.total})...`
+                  : "Đang tạo..."}
+              </span>
             </span>
           )}
 
@@ -550,6 +556,8 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
     clearSentenceAudio,
     updateSentenceText,
     assignSpeakerToSentence,
+    sentenceProgress,
+    setSentenceProgress,
   } = useProjectStore();
 
   const {
@@ -741,6 +749,17 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
           "error",
           err instanceof Error ? err.message : String(err)
         );
+      } finally {
+        setSentenceProgress(sentence.id, null);
+        // Chốt an toàn: câu tuyệt đối không được kẹt lại ở trạng thái generating
+        const curr = useProjectStore.getState().sentences.find((s) => s.id === sentence.id);
+        if (curr?.status === "generating") {
+          if (curr.audio_path) {
+            updateSentenceStatus(sentence.id, "ready");
+          } else {
+            updateSentenceStatus(sentence.id, "pending");
+          }
+        }
       }
     },
     [
@@ -754,6 +773,7 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
       setIsPlaying,
       setIsServerOnline,
       setPlayingSentenceId,
+      setSentenceProgress,
       setSelectedSentenceId,
       speed,
       temperature,
@@ -816,6 +836,17 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
           "error",
           err instanceof Error ? err.message : String(err)
         );
+      } finally {
+        setSentenceProgress(sentence.id, null);
+        // Chốt an toàn: câu tuyệt đối không được kẹt lại ở trạng thái generating
+        const curr = useProjectStore.getState().sentences.find((s) => s.id === sentence.id);
+        if (curr?.status === "generating") {
+          if (curr.audio_path) {
+            updateSentenceStatus(sentence.id, "ready");
+          } else {
+            updateSentenceStatus(sentence.id, "pending");
+          }
+        }
       }
     },
     [
@@ -827,6 +858,7 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
       setIsPlaying,
       setIsServerOnline,
       setPlayingSentenceId,
+      setSentenceProgress,
       setSelectedSentenceId,
       speed,
       temperature,
@@ -1359,6 +1391,7 @@ export const SentenceTable: React.FC<SentenceTableProps> = ({
                     editText={editText}
                     characters={characters}
                     isServerOnline={isServerOnline}
+                    progress={sentenceProgress[item.id]}
                     searchQuery={searchQuery}
                     matchCase={matchCase}
                     onRowClick={handleRowClick}

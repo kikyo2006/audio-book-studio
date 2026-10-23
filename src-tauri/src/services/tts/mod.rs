@@ -22,6 +22,14 @@ pub struct TtsSentenceResult {
     pub duration: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TtsSentenceProgress {
+    pub sentence_id: String,
+    pub current: usize,
+    pub total: usize,
+}
+
 use std::sync::LazyLock;
 
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
@@ -331,12 +339,16 @@ async fn request_wav_bytes(
     Ok(bytes)
 }
 
-pub async fn synthesize_to_file(
+pub async fn synthesize_to_file<F>(
     server_url: &str,
     req: &TtsSynthesizeRequest,
     output_path: &Path,
     punctuation_pauses: Option<&PunctuationPauses>,
-) -> Result<f64, String> {
+    mut on_progress: Option<F>,
+) -> Result<f64, String>
+where
+    F: FnMut(usize, usize) + Send,
+{
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Không tạo được thư mục cache âm thanh: {}", e))?;
     }
@@ -350,6 +362,9 @@ pub async fn synthesize_to_file(
     let has_tag = PAUSE_TAG_RE.is_match(&req.input);
 
     if !has_pause && !has_tag && segments.len() <= 1 {
+        if let Some(ref mut cb) = on_progress {
+            cb(1, 1);
+        }
         let bytes = request_wav_bytes(server_url, req).await?;
         fs::write(output_path, &bytes)
             .map_err(|e| format!("Lỗi lưu file WAV: {}", e))?;
@@ -357,20 +372,31 @@ pub async fn synthesize_to_file(
         return read_wav_duration(output_path);
     }
 
-    synthesize_with_pauses(server_url, req, &segments, output_path).await
+    synthesize_with_pauses(server_url, req, &segments, output_path, on_progress).await
 }
 
 /// Sinh audio từng đoạn đọc rồi chèn khoảng lặng giữa chúng, ghi thành 1 file WAV duy nhất
-async fn synthesize_with_pauses(
+async fn synthesize_with_pauses<F>(
     server_url: &str,
     req: &TtsSynthesizeRequest,
     segments: &[TextSegment],
     output_path: &Path,
-) -> Result<f64, String> {
+    mut on_progress: Option<F>,
+) -> Result<f64, String>
+where
+    F: FnMut(usize, usize) + Send,
+{
     enum Piece {
         Samples(Vec<i32>),
         Silence(u32),
     }
+
+    let total_speech = segments
+        .iter()
+        .filter(|s| matches!(s, TextSegment::Speech(_)))
+        .count()
+        .max(1);
+    let mut current_speech = 0usize;
 
     let mut pieces: Vec<Piece> = Vec::new();
     let mut spec: Option<hound::WavSpec> = None;
@@ -379,6 +405,11 @@ async fn synthesize_with_pauses(
         match segment {
             TextSegment::Pause(ms) => pieces.push(Piece::Silence(*ms)),
             TextSegment::Speech(text) => {
+                current_speech += 1;
+                if let Some(ref mut cb) = on_progress {
+                    cb(current_speech, total_speech);
+                }
+
                 let mut part_req = req.clone();
                 part_req.input = text.clone();
                 let bytes = request_wav_bytes(server_url, &part_req).await?;

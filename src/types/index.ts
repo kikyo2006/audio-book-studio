@@ -37,6 +37,12 @@ export interface TtsSentenceResult {
   duration: number;
 }
 
+export interface TtsSentenceProgress {
+  sentenceId: string;
+  current: number;
+  total: number;
+}
+
 export interface ChapterItem {
   id: string;
   project_id: string;

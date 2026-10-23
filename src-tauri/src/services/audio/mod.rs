@@ -9,6 +9,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 mod bgm_item;
+pub mod transcode;
 pub use bgm_item::trim_and_export_bgm_wav;
 #[cfg(test)]
 mod tests;

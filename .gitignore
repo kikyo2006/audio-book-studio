@@ -49,3 +49,6 @@ audio_cache/
 
 !AGENTS.md
 *.bk*
+
+# FFmpeg sidecar binaries (fetched by scripts, too large for git)
+/src-tauri/binaries/

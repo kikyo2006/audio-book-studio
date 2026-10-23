@@ -53,6 +53,7 @@ import {
   tauriExportProjectArchive,
   tauriImportProjectArchive,
   tauriListenProjectArchiveProgress,
+  tauriListenSentenceProgress,
   tauriSelectProjectExportPath,
   tauriSelectProjectImportFile,
 } from "@/lib/tauri";
@@ -285,6 +286,20 @@ export default function Home() {
       },
     });
   };
+
+  // Listen to sentence sub-segment TTS generation progress (e.g. 1/11)
+  const setSentenceProgress = useProjectStore((s) => s.setSentenceProgress);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void tauriListenSentenceProgress((p) => {
+      setSentenceProgress(p.sentenceId, { current: p.current, total: p.total });
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [setSentenceProgress]);
 
   // Global shortcuts & Disable Browser Inspect/F12
   useEffect(() => {

@@ -19,6 +19,7 @@ interface ProjectState {
   isPlaying: boolean;
   isBatchGenerating: boolean;
   batchProgress: { current: number; total: number };
+  sentenceProgress: Record<string, { current: number; total: number }>;
 
   setProjects: (projects: ProjectMetadata[]) => void;
   setActiveProject: (project: ProjectMetadata | null) => void;
@@ -33,6 +34,7 @@ interface ProjectState {
   setIsPlaying: (playing: boolean) => void;
   setIsBatchGenerating: (generating: boolean) => void;
   setBatchProgress: (progress: { current: number; total: number }) => void;
+  setSentenceProgress: (sentenceId: string, progress: { current: number; total: number } | null) => void;
 
   updateSentenceStatus: (id: string, status: SentenceStatus, error?: string) => void;
   updateSentenceAudio: (id: string, audioPath: string, duration: number, voice?: string) => void;
@@ -60,9 +62,25 @@ export const useProjectStore = create<ProjectState>((set) => ({
   isPlaying: false,
   isBatchGenerating: false,
   batchProgress: { current: 0, total: 0 },
+  sentenceProgress: {},
 
   setProjects: (projects) => set({ projects }),
   setActiveProject: (activeProject) => set({ activeProject }),
+  setSentenceProgress: (sentenceId, progress) =>
+    set((state) => {
+      if (!progress) {
+        if (!state.sentenceProgress[sentenceId]) return state;
+        const next = { ...state.sentenceProgress };
+        delete next[sentenceId];
+        return { sentenceProgress: next };
+      }
+      return {
+        sentenceProgress: {
+          ...state.sentenceProgress,
+          [sentenceId]: progress,
+        },
+      };
+    }),
   setChapters: (chapters) =>
     set((state) => {
       const enabledChapters = chapters.filter((c) => c.is_enabled !== false);

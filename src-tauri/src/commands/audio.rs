@@ -1,25 +1,45 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::Database;
+use crate::services::audio::transcode::{
+    finalize_export, prepare_cover, wav_duration_ms, ChapterMark, OutputFormat, TrackMetadata,
+};
 use crate::services::audio::{item_kind_from_text, AudioConcatenateOptions, ItemKind};
+
+#[derive(Clone, serde::Serialize)]
+struct ExportProgress {
+    percent: f32,
+    stage: String,
+}
+
+fn emit_progress(app: &AppHandle, percent: f32, stage: &str) {
+    let _ = app.emit(
+        "export-progress",
+        ExportProgress { percent: percent.clamp(0.0, 100.0), stage: stage.to_string() },
+    );
+}
 
 #[tauri::command]
 pub async fn export_chapter_audio(
-    _project_id: String,
+    project_id: String,
     chapter_id: String,
     output_path: String,
     sentence_pause_ms: u32,
     paragraph_pause_ms: u32,
     mix_bgm: Option<bool>,
     bgm_volume: Option<f32>,
+    format: Option<String>,
+    title: Option<String>,
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
 ) -> Result<f64, String> {
     let db = db.inner().clone();
 
     tokio::task::spawn_blocking(move || {
+        emit_progress(&app, 0.0, "Đang ghép âm thanh");
         // Kiểm tra nếu chương đang bị disable thì từ chối xuất
         let chapter = db.get_chapter_by_id(&chapter_id)?;
         if let Some(c) = chapter.as_ref() {
@@ -54,10 +74,17 @@ pub async fn export_chapter_audio(
             ..Default::default()
         };
 
-        let target = Path::new(&output_path);
+        let format = OutputFormat::parse(format.as_deref());
+        let final_target = PathBuf::from(&output_path).with_extension(format.extension());
+        let work_dir = std::env::temp_dir().join(format!("book_studio_export_{}", uuid::Uuid::new_v4()));
+        let temp_wav = work_dir.join("chapter.wav");
+        let target: &Path = if format == OutputFormat::Wav { &final_target } else { &temp_wav };
+        if format != OutputFormat::Wav {
+            let _ = std::fs::create_dir_all(&work_dir);
+        }
 
         let should_mix = mix_bgm.unwrap_or(false);
-        if should_mix {
+        let concat_result = if should_mix {
             let chapter = db.get_chapter_by_id(&chapter_id)?;
             let bgm_opt = chapter.as_ref().and_then(|c| c.bgm_path.as_ref()).map(PathBuf::from);
             let vol = bgm_volume.unwrap_or_else(|| {
@@ -82,7 +109,37 @@ pub async fn export_chapter_audio(
                 None,
                 0.0,
             )
+        };
+
+        let meta = if format == OutputFormat::Wav {
+            TrackMetadata::default()
+        } else {
+            let project = db.get_project_by_id(&project_id)?;
+            let chapter = db.get_chapter_by_id(&chapter_id)?;
+            let chapter_title = chapter.as_ref().map(|c| c.title.clone()).unwrap_or_else(|| project.title.clone());
+            let title = title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| chapter_title.clone());
+            let total_ms = concat_result.as_ref().map(|d| (*d * 1000.0) as u64).unwrap_or(0);
+            TrackMetadata {
+                title: title.clone(),
+                artist: project.author.clone(),
+                album: project.title.clone(),
+                track: chapter.as_ref().map(|c| c.index as u32),
+                cover: prepare_cover(&project, &work_dir),
+                chapters: vec![ChapterMark { title: chapter_title, start_ms: 0, end_ms: total_ms }],
+            }
+        };
+
+        emit_progress(&app, 50.0, "Đang chuyển đổi định dạng");
+        let result = finalize_export(concat_result, target, &final_target, format, &meta, &|f| {
+            emit_progress(&app, 50.0 + f * 50.0, "Đang chuyển đổi định dạng")
+        });
+        if format != OutputFormat::Wav {
+            let _ = std::fs::remove_dir_all(&work_dir);
         }
+        if result.is_ok() {
+            emit_progress(&app, 100.0, "Hoàn tất");
+        }
+        result
     })
     .await
     .map_err(|e| format!("Task export lỗi: {}", e))?
@@ -98,11 +155,15 @@ pub async fn export_book_audio(
     mix_bgm: Option<bool>,
     bgm_volume: Option<f32>,
     chapter_ids: Option<Vec<String>>,
+    format: Option<String>,
+    title: Option<String>,
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
 ) -> Result<f64, String> {
     let db = db.inner().clone();
 
     tokio::task::spawn_blocking(move || {
+        emit_progress(&app, 0.0, "Đang chuẩn bị");
         let chapters = db.get_chapters(&project_id)?;
         // Chỉ nối các chương được chọn (None = tất cả chương đang bật)
         let enabled_chapters: Vec<_> = chapters
@@ -119,6 +180,7 @@ pub async fn export_book_audio(
         let _ = std::fs::create_dir_all(&temp_dir);
 
         let mut chapter_wav_paths = Vec::new();
+        let mut chapter_titles: Vec<String> = Vec::new();
 
         let opts = AudioConcatenateOptions {
             sentence_pause_ms,
@@ -127,6 +189,11 @@ pub async fn export_book_audio(
         };
 
         for (idx, chap) in enabled_chapters.iter().enumerate() {
+            emit_progress(
+                &app,
+                idx as f32 / enabled_chapters.len() as f32 * 70.0,
+                &format!("Đang xử lý chương {}/{}", idx + 1, enabled_chapters.len()),
+            );
             let sentences = match db.get_sentences(&chap.id) {
                 Ok(s) => s,
                 Err(_) => continue,
@@ -179,6 +246,7 @@ pub async fn export_book_audio(
 
             if res.is_ok() {
                 chapter_wav_paths.push(temp_chap_file);
+                chapter_titles.push(chap.title.clone());
             }
         }
 
@@ -187,16 +255,53 @@ pub async fn export_book_audio(
             return Err("Không có chương nào có câu âm thanh hoàn chỉnh để xuất.".to_string());
         }
 
-        let target = Path::new(&output_path);
-        let total_duration = crate::services::audio::concatenate_wav_files(
+        let format = OutputFormat::parse(format.as_deref());
+        let final_target = PathBuf::from(&output_path).with_extension(format.extension());
+        let temp_master = temp_dir.join("master.wav");
+        let target: &Path = if format == OutputFormat::Wav { &final_target } else { &temp_master };
+
+        emit_progress(&app, 70.0, "Đang nối các chương");
+        let concat_result = crate::services::audio::concatenate_wav_files(
             &chapter_wav_paths,
             target,
             chapter_pause_ms,
         );
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let meta = if format == OutputFormat::Wav {
+            TrackMetadata::default()
+        } else {
+            let project = db.get_project_by_id(&project_id)?;
+            let mut marks = Vec::new();
+            let mut cursor_ms = 0u64;
+            for (path, title) in chapter_wav_paths.iter().zip(chapter_titles.iter()) {
+                let len = wav_duration_ms(path).unwrap_or(0);
+                marks.push(ChapterMark {
+                    title: title.clone(),
+                    start_ms: cursor_ms,
+                    end_ms: cursor_ms + len,
+                });
+                cursor_ms += len + chapter_pause_ms as u64;
+            }
+            TrackMetadata {
+                title: title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| project.title.clone()),
+                artist: project.author.clone(),
+                album: project.title.clone(),
+                track: None,
+                cover: prepare_cover(&project, &temp_dir),
+                chapters: marks,
+            }
+        };
 
-        total_duration
+        emit_progress(&app, 80.0, "Đang chuyển đổi định dạng");
+        let result = finalize_export(concat_result, target, &final_target, format, &meta, &|f| {
+            emit_progress(&app, 80.0 + f * 20.0, "Đang chuyển đổi định dạng")
+        });
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        if result.is_ok() {
+            emit_progress(&app, 100.0, "Hoàn tất");
+        }
+
+        result
     })
     .await
     .map_err(|e| format!("Task export toàn bộ sách lỗi: {}", e))?
@@ -217,6 +322,8 @@ pub async fn export_batch_chapters(
     paragraph_pause_ms: u32,
     mix_bgm: Option<bool>,
     bgm_volume: Option<f32>,
+    format: Option<String>,
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
 ) -> Result<BatchExportResult, String> {
     let db = db.inner().clone();
@@ -241,8 +348,20 @@ pub async fn export_batch_chapters(
 
         let mut exported_count = 0usize;
         let total_chapters = enabled_chapters.len();
+        let format = OutputFormat::parse(format.as_deref());
+        let project = if format == OutputFormat::Wav { None } else { Some(db.get_project_by_id(&project_id)?) };
+        let work_dir = std::env::temp_dir().join(format!("book_studio_export_{}", uuid::Uuid::new_v4()));
+        if format != OutputFormat::Wav {
+            let _ = std::fs::create_dir_all(&work_dir);
+        }
+        let cover = project.as_ref().and_then(|p| prepare_cover(p, &work_dir));
 
-        for chap in &enabled_chapters {
+        for (idx, chap) in enabled_chapters.iter().enumerate() {
+            emit_progress(
+                &app,
+                idx as f32 / total_chapters as f32 * 100.0,
+                &format!("Đang xuất chương {}/{}", idx + 1, total_chapters),
+            );
             let sentences = match db.get_sentences(&chap.id) {
                 Ok(s) => s,
                 Err(_) => continue,
@@ -271,8 +390,10 @@ pub async fn export_batch_chapters(
                 .trim()
                 .replace(&['/', '\\', ':', '*', '?', '"', '<', '>', '|'][..], "_");
 
-            let filename = format!("{:02} - {}.wav", chap.index, clean_title);
-            let target_file = out_dir.join(filename);
+            let filename = format!("{:02} - {}.{}", chap.index, clean_title, format.extension());
+            let final_file = out_dir.join(filename);
+            let temp_wav = work_dir.join(format!("batch_{:04}.wav", chap.index));
+            let target_file: PathBuf = if format == OutputFormat::Wav { final_file.clone() } else { temp_wav };
 
             let should_mix = mix_bgm.unwrap_or(false);
             let res = if should_mix && chap.bgm_path.is_some() {
@@ -299,14 +420,37 @@ pub async fn export_batch_chapters(
                 )
             };
 
+            let res = if format == OutputFormat::Wav {
+                res
+            } else {
+                let meta = TrackMetadata {
+                    title: chap.title.clone(),
+                    artist: project.as_ref().map(|p| p.author.clone()).unwrap_or_default(),
+                    album: project.as_ref().map(|p| p.title.clone()).unwrap_or_default(),
+                    track: Some(chap.index as u32),
+                    cover: cover.clone(),
+                    chapters: vec![ChapterMark {
+                        title: chap.title.clone(),
+                        start_ms: 0,
+                        end_ms: res.as_ref().map(|d| (*d * 1000.0) as u64).unwrap_or(0),
+                    }],
+                };
+                finalize_export(res, &target_file, &final_file, format, &meta, &|_| {})
+            };
+
             if res.is_ok() {
                 exported_count += 1;
             }
         }
 
+        if format != OutputFormat::Wav {
+            let _ = std::fs::remove_dir_all(&work_dir);
+        }
+
         if exported_count == 0 {
             return Err("Không có chương nào có file âm thanh sẵn sàng để xuất.".to_string());
         }
+        emit_progress(&app, 100.0, "Hoàn tất");
 
         Ok(BatchExportResult {
             exported_count,
@@ -704,4 +848,78 @@ fn base64_encode(data: &[u8]) -> String {
         i += 3;
     }
     result
+}
+
+/// Chạy lệnh mở của hệ điều hành mà không chặn app và không bật cửa sổ console trên Windows.
+fn spawn_os_open(mut cmd: std::process::Command) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Không mở được: {}", e))
+}
+
+/// Mở file (hoặc thư mục) bằng ứng dụng mặc định của hệ điều hành.
+#[tauri::command]
+pub fn open_path_default(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Không tìm thấy: {}", path));
+    }
+    #[cfg(target_os = "macos")]
+    let cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(p);
+        c
+    };
+    #[cfg(windows)]
+    let cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", ""]).arg(p);
+        c
+    };
+    #[cfg(all(not(target_os = "macos"), not(windows)))]
+    let cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(p);
+        c
+    };
+    spawn_os_open(cmd)
+}
+
+/// Mở thư mục chứa file và chọn sẵn file đó (nếu `path` là thư mục thì mở chính thư mục).
+#[tauri::command]
+pub fn reveal_path_in_folder(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Không tìm thấy: {}", path));
+    }
+    #[cfg(target_os = "macos")]
+    let cmd = {
+        let mut c = std::process::Command::new("open");
+        if p.is_file() { c.arg("-R"); }
+        c.arg(p);
+        c
+    };
+    #[cfg(windows)]
+    let cmd = {
+        let mut c = std::process::Command::new("explorer");
+        if p.is_file() {
+            c.arg(format!("/select,{}", p.display()));
+        } else {
+            c.arg(p);
+        }
+        c
+    };
+    #[cfg(all(not(target_os = "macos"), not(windows)))]
+    let cmd = {
+        let dir = if p.is_file() { p.parent().unwrap_or(p) } else { p };
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(dir);
+        c
+    };
+    spawn_os_open(cmd)
 }

@@ -72,6 +72,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
     setBatchProgress,
     updateSentenceStatus,
     updateSentenceAudio,
+    setSentenceProgress,
     removeProject,
     setActiveProject,
     setActiveChapter,
@@ -210,6 +211,16 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           "error",
           err instanceof Error ? err.message : String(err)
         );
+      } finally {
+        setSentenceProgress(sentence.id, null);
+        const curr = useProjectStore.getState().sentences.find((s) => s.id === sentence.id);
+        if (curr?.status === "generating") {
+          if (curr.audio_path) {
+            updateSentenceStatus(sentence.id, "ready");
+          } else {
+            updateSentenceStatus(sentence.id, "pending");
+          }
+        }
       }
     }
 

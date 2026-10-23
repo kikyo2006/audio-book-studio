@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::Database;
 use crate::services::tts::{
     check_tts_health, get_sentence_audio_cache_path, synthesize_to_file,
-    PunctuationPauses, TtsSentenceResult, TtsSynthesizeRequest,
+    PunctuationPauses, TtsSentenceProgress, TtsSentenceResult, TtsSynthesizeRequest,
 };
 
 #[tauri::command]
@@ -65,7 +65,27 @@ pub async fn synthesize_sentence(
         temperature,
     };
 
-    let duration = synthesize_to_file(&server_url, &req, &audio_path, punctuation_pauses.as_ref()).await?;
+    let app_progress = app_handle.clone();
+    let sid_progress = sentence_id.clone();
+    let progress_cb = move |current: usize, total: usize| {
+        let _ = app_progress.emit(
+            "tts-sentence-progress",
+            TtsSentenceProgress {
+                sentence_id: sid_progress.clone(),
+                current,
+                total,
+            },
+        );
+    };
+
+    let duration = synthesize_to_file(
+        &server_url,
+        &req,
+        &audio_path,
+        punctuation_pauses.as_ref(),
+        Some(progress_cb),
+    )
+    .await?;
     let audio_path_str = audio_path.to_string_lossy().to_string();
 
     let db_clone = db.inner().clone();
